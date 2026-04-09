@@ -1668,7 +1668,7 @@ calc_execution_quality(zone_price, is_buy, rr_ok) =>
     q += valid_sequence ? 10 : 0
     q += not na(zone_dist) and zone_dist <= 20 ? 10 : 0
     // v10.13.0: Displacement / reaction quality filter
-    q += bars_in_zone <= 3 ? 10 : bars_in_zone <= 6 ? 0 : -15
+    q += bars_in_zone > 0 ? (bars_in_zone <= 3 ? 10 : bars_in_zone <= 6 ? 0 : -15) : 0
     q += reaction_candle_quality ? 10 : 0
     math.max(0, math.min(q, 100))
 
