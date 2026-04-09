@@ -1,8 +1,33 @@
 //@version=6
-indicator("SMC SuperFib v10.12.1 – SF Engine Redesign", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500, max_bars_back=5000)
+indicator("SMC SuperFib v10.13.0 – ICT Alignment Patch", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500, max_bars_back=5000)
 
 // ═══════════════════════════════════════════════════════════════════
-// SMC SuperFib v10.12.1 — SF Engine Redesign
+// SMC SuperFib v10.13.0 — ICT Alignment Patch
+//
+// v10.13.0 CHANGES (over v10.12.1):
+//   FIX 1 — Arrow direction: fib arrows now reflect actual measured
+//            leg direction (close vs open), not session-open placement
+//            proxy. Bearish sessions show red down arrows; bullish
+//            sessions show green up arrows. Fib leg direction is
+//            cleanly separated from execution/trade bias.
+//   FIX 2 — HTF PDA nesting: HTF structure trend detected via
+//            request.security. HTF FVG bonus increased to +2. HTF
+//            trend alignment adds +1. Setup quality gains +15 for
+//            HTF alignment, -15 for HTF conflict.
+//   FIX 3 — PDA hierarchy: ranked liquidity scoring replaces flat
+//            bonus. EQH/EQL > PDH/PDL > PWH/PWL > BSL/SSL. PDA
+//            confluence bonus when POI + FVG both present.
+//   FIX 4 — Displacement filter: zone dwell tracking penalizes
+//            hovering in PDA. Reaction candle quality (body ratio
+//            + range vs ATR) rewards immediate rejection.
+//   FIX 5 — Narrative gating: flat +1 cosmetic bonus in eff_base
+//            replaced with narrative-gated bonus requiring liquidity
+//            sweep + MSS + valid sequence. Reduces fib-only authority.
+//   FIX 6 — EF narrative flag: tracks whether EF anchor came from
+//            sweep+MSS leg vs year fallback. EF proximity bonus
+//            reduced from 20 to 10 when not narrative-anchored.
+//   FIX 7 — Dashboard: HTF PDA row added to ICT table. Version
+//            bumped to v10.13.0.
 //
 // v10.12.1 CHANGES (over v10.12):
 //   FIX 1 — SF draw layer made pure render-only: sf_draw_t() now receives
@@ -518,10 +543,10 @@ var string f3_name    = ""
 if barstate.islast
     f1_high := s2_high
     f1_low  := s2_low
-    f1_bull := (s2_high - s2_open) >= (s2_open - s2_low)
+    f1_bull := s2_close >= s2_open
     f3_high := s1_high
     f3_low  := s1_low
-    f3_bull := (s1_high - s1_open) >= (s1_open - s1_low)
+    f3_bull := s1_close >= s1_open
 
     if not na(s1_high) and not na(s2_high) and not na(s1_low) and not na(s2_low)
         if f3_bull
@@ -829,12 +854,18 @@ else if bear_leg_valid
     ef_anchor_dir  := -1
     ef_anchor_bar  := bar_index
 
+// v10.13.0: Track whether EF anchor came from sweep+MSS narrative leg
+var bool ef_is_narrative = false
+if bull_leg_valid or bear_leg_valid
+    ef_is_narrative := true
+
 if ef_fallback_year and (na(ef_anchor_low) or na(ef_anchor_high) or (bar_index - nz(ef_anchor_bar, bar_index)) > ef_fresh_bars)
     if not na(ef_curr_year_high) and not na(ef_curr_year_low)
         ef_anchor_low  := ef_curr_year_low
         ef_anchor_high := ef_curr_year_high
         ef_anchor_dir  := close >= (ef_curr_year_high + ef_curr_year_low) * 0.5 ? 1 : -1
         ef_anchor_bar  := bar_index
+        ef_is_narrative := false
 
 if not na(ef_anchor_low) and not na(ef_anchor_high) and ef_anchor_high > ef_anchor_low
     if ef_anchor_dir == 1
@@ -896,6 +927,13 @@ ef_pre_trigger_raw := (ef_dist_ote_lo <= prox_thresh * ef_pre_width or ef_dist_o
 
 ict_in_ote_buy  := ef_near_entry_buy
 ict_in_ote_sell := ef_near_entry_sell
+
+// v10.13.0: Zone dwell tracking — penalize hovering in PDA
+var int bars_in_zone = 0
+if ef_in_ote_zone
+    bars_in_zone := bars_in_zone + 1
+else
+    bars_in_zone := 0
 
 // PATCH J: valid_sequence window measured from sweep_bar (10 bars)
 valid_sequence = not na(sweep_bar) and not na(mss_bar) and mss_bar > sweep_bar and (bar_index - sweep_bar) <= 10
@@ -1228,12 +1266,20 @@ htf_low3     = request.security(syminfo.tickerid, htf_tf, low[3],  lookahead=bar
 htf_bull_fvg = not na(htf_low1)  and not na(htf_high3) and htf_low1  > htf_high3
 htf_bear_fvg = not na(htf_high1) and not na(htf_low3)  and htf_high1 < htf_low3
 
+// v10.13.0: HTF structure trend detection for PDA nesting
+htf_close1 = request.security(syminfo.tickerid, htf_tf, close[1], lookahead=barmerge.lookahead_off)
+htf_open1  = request.security(syminfo.tickerid, htf_tf, open[1],  lookahead=barmerge.lookahead_off)
+htf_trend  = not na(htf_close1) and not na(htf_open1) ? (htf_close1 > htf_open1 ? 1 : htf_close1 < htf_open1 ? -1 : 0) : 0
+
 regime_ok      = regime != 0
 body_cur       = math.abs(close - open)
 range_cur      = high - low
 body_ratio_cur = range_cur > 0 ? body_cur / range_cur : 0.0
 wick_bull      = range_cur > 0 ? (close - low)  / range_cur : 0.0
 wick_bear      = range_cur > 0 ? (high - close) / range_cur : 0.0
+
+// v10.13.0: Reaction candle quality — displacement away from PDA
+reaction_candle_quality = body_ratio_cur >= 0.50 and range_cur >= atr14 * 0.6
 
 bull_fvg    = low > high[2]
 bear_fvg    = high < low[2]
@@ -1587,27 +1633,43 @@ compute_score(pz, bst) =>
         sb := -1
     bst + ef_al + ote_al + sb
 
+// v10.13.0: PDA hierarchy ranking — ICT/SMC ranked execution preference
+pda_rank_bonus(liq_type) =>
+    liq_type == "EQH" or liq_type == "EQL" ? 10 :
+     liq_type == "PDH" or liq_type == "PDL" ? 8 :
+     liq_type == "PWH" or liq_type == "PWL" ? 6 :
+     liq_type == "BSL" or liq_type == "SSL" ? 3 : 0
+
 calc_setup_quality(is_buy, major_ok, poi_ok, fvg_ok, poi_fresh_ok) =>
     int q = 0
-    q += liquidity_type != "NONE" ? 20 : 0
+    // v10.13.0: ranked PDA liquidity (replaces flat 20)
+    q += liquidity_type != "NONE" ? (10 + pda_rank_bonus(liquidity_type)) : 0
     q += is_buy ? (mss_bullish ? 15 : 0) : (mss_bearish ? 15 : 0)
     q += major_ok ? 15 : 0
     q += poi_ok ? 20 : 0
     q += fvg_ok ? 10 : 0
+    q += (poi_ok and fvg_ok) ? 5 : 0                                                                    // v10.13.0: PDA confluence bonus
     q += ((is_buy and ict_struct_trend == 1) or ((not is_buy) and ict_struct_trend == -1)) ? 10 : 0
     q += session_ok ? 10 : 0
     q += poi_fresh_ok ? 0 : -10
+    // v10.13.0: HTF PDA nesting — alignment bonus / conflict penalty
+    q += ((is_buy and htf_trend == 1) or ((not is_buy) and htf_trend == -1)) ? 15 : 0
+    q += ((is_buy and htf_trend == -1) or ((not is_buy) and htf_trend == 1)) ? -15 : 0
     math.max(0, math.min(q, 100))
 
 calc_execution_quality(zone_price, is_buy, rr_ok) =>
     int q = 0
     zone_dist = not na(zone_price) ? math.abs(close - zone_price) * (pip_type == "JPY" ? 100.0 : 10000.0) : na
     q += not na(zone_dist) ? math.max(0, 25 - int(math.min(zone_dist, 25.0))) : 0
-    q += ((is_buy and ef_near_entry_buy) or ((not is_buy) and ef_near_entry_sell)) ? 20 : 0
+    // v10.13.0: EF proximity gated by narrative anchor quality
+    q += ((is_buy and ef_near_entry_buy) or ((not is_buy) and ef_near_entry_sell)) ? (ef_is_narrative ? 20 : 10) : 0
     q += rr_ok ? 25 : 0
     q += session_ok ? 10 : 0
     q += valid_sequence ? 10 : 0
     q += not na(zone_dist) and zone_dist <= 20 ? 10 : 0
+    // v10.13.0: Displacement / reaction quality filter
+    q += bars_in_zone > 0 ? (bars_in_zone <= 3 ? 10 : bars_in_zone <= 6 ? 0 : -15) : 0
+    q += reaction_candle_quality ? 10 : 0
     math.max(0, math.min(q, 100))
 
 grade_setup(setup_q, exec_q, rr_ok, poi_ok, major_ok) =>
@@ -1649,9 +1711,15 @@ if show_signals and regime_ok
     bst = base_stars_at_close()
     dbo = depth_bonus_at_close(pz)
     pab = pivot_approach_bonus(pz)
-    htf_bonus     = (pz == -1 and htf_bull_fvg) or (pz == 1 and htf_bear_fvg) ? 1 : 0
+    // v10.13.0: HTF PDA nesting — increased weighting
+    htf_fvg_bonus   = (pz == -1 and htf_bull_fvg) or (pz == 1 and htf_bear_fvg) ? 2 : 0
+    htf_trend_bonus = (pz == -1 and htf_trend == 1) or (pz == 1 and htf_trend == -1) ? 1 : 0
+    htf_bonus       = htf_fvg_bonus + htf_trend_bonus
     ict_ote_bonus = ict_enabled and ((pz == -1 and ict_in_ote_buy) or (pz == 1 and ict_in_ote_sell)) ? 1 : 0
-    eff_base      = math.min(bst + dbo + pab + htf_bonus + 1 + ict_ote_bonus, 5)   // +1 bonus preserved (cosmetic)
+    // v10.13.0: narrative-gated bonus replaces flat +1 cosmetic bonus
+    _narrative_ok    = liquidity_type != "NONE" and (mss_bullish or mss_bearish) and valid_sequence
+    _narrative_bonus = _narrative_ok ? 1 : 0
+    eff_base      = math.min(bst + dbo + pab + htf_bonus + _narrative_bonus + ict_ote_bonus, 5)
     score        := compute_score(pz, bst)
 
     bull_poi_ok = bull_poi_fresh and not na(bull_poi_mid)
@@ -1978,7 +2046,7 @@ var table hm_tbl = na
 if ict_enabled and show_ict_table and barstate.islast
     if not na(hm_tbl)
         table.delete(hm_tbl)
-    hm_tbl := table.new(position.top_right, 2, 12,
+    hm_tbl := table.new(position.top_right, 2, 13,
                          bgcolor=C_TBL_BG_DATA,
                          border_color=C_TBL_BORDER, border_width=1,
                          frame_color=C_TBL_BORDER,  frame_width=1)
@@ -1987,6 +2055,9 @@ if ict_enabled and show_ict_table and barstate.islast
     bias_str    = pressure_bias > ict_bias_gate ? "▲ BULL" : pressure_bias < -ict_bias_gate ? "▼ BEAR" : "— NEUTRAL"
     struct_str  = ict_struct_trend == 1 ? "▲ BULL" : ict_struct_trend == -1 ? "▼ BEAR" : ict_struct_trend == 2 ? "⚡ MSS" : "— NEUTRAL"
     struct_col  = ict_struct_trend == 1 ? C_TBL_BULL : ict_struct_trend == -1 ? C_TBL_BEAR : ict_struct_trend == 2 ? color.new(#FF8C00,0) : C_TBL_NEUTRAL
+    // v10.13.0: HTF PDA trend display
+    htf_pda_str = htf_trend == 1 ? "▲ BULL" : htf_trend == -1 ? "▼ BEAR" : "— NEUTRAL"
+    htf_pda_col = htf_trend == 1 ? C_TBL_BULL : htf_trend == -1 ? C_TBL_BEAR : C_TBL_NEUTRAL
     bull_pct    = str.tostring(math.round(bull_pressure * 100)) + "%"
     bear_pct    = str.tostring(math.round(bear_pressure * 100)) + "%"
     in_ote_str  = ict_in_ote_buy ? "BUY ZONE" : ict_in_ote_sell ? "SELL ZONE" : "—"
@@ -1996,31 +2067,33 @@ if ict_enabled and show_ict_table and barstate.islast
     stage_col   = state == "ACTIVE" ? C_TBL_BULL : C_TBL_NEUTRAL
 
     table.cell(hm_tbl, 0,  0, "SMC SuperFIB",         text_color=C_TBL_HEAD_TXT,        text_size=size.small, bgcolor=C_TBL_BG_HEAD)
-    table.cell(hm_tbl, 1,  0, "v10.12.1",            text_color=color.new(#00FFFF,40), text_size=size.tiny,  bgcolor=C_TBL_BG_HEAD)
+    table.cell(hm_tbl, 1,  0, "v10.13.0",            text_color=color.new(#00FFFF,40), text_size=size.tiny,  bgcolor=C_TBL_BG_HEAD)
     table.cell(hm_tbl, 0,  1, "STRUCTURE",          text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 1,  1, struct_str,           text_color=struct_col,            text_size=size.small, bgcolor=C_TBL_BG_DATA)
-    table.cell(hm_tbl, 0,  2, "BIAS",               text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
-    table.cell(hm_tbl, 1,  2, bias_str,             text_color=bias_col,              text_size=size.small, bgcolor=C_TBL_BG_DATA)
-    table.cell(hm_tbl, 0,  3, "BULL PRESS",         text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
-    table.cell(hm_tbl, 1,  3, bull_pct,             text_color=C_TBL_BULL,            text_size=size.small, bgcolor=C_TBL_BG_DATA)
-    table.cell(hm_tbl, 0,  4, "BEAR PRESS",         text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
-    table.cell(hm_tbl, 1,  4, bear_pct,             text_color=C_TBL_BEAR,            text_size=size.small, bgcolor=C_TBL_BG_DATA)
-    table.cell(hm_tbl, 0,  5, "EF OTE",            text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
-    table.cell(hm_tbl, 1,  5, in_ote_str,           text_color=in_ote_col,            text_size=size.small, bgcolor=C_TBL_BG_DATA)
-    table.cell(hm_tbl, 0,  6, "SCORE",              text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
-    table.cell(hm_tbl, 1,  6, str.tostring(score) + " / " + str.tostring(score_threshold), text_color=score_col, text_size=size.small, bgcolor=C_TBL_BG_DATA)
-    table.cell(hm_tbl, 0,  7, "LIQ SWEEP",          text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
-    table.cell(hm_tbl, 1,  7, sweep_up ? "UP" : sweep_down ? "DOWN" : "NONE", text_color=color.new(#DDE4F0,0), text_size=size.small, bgcolor=C_TBL_BG_DATA)
-    table.cell(hm_tbl, 0,  8, "MSS STATE",          text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
-    table.cell(hm_tbl, 1,  8, mss_bullish ? "BULL" : mss_bearish ? "BEAR" : "NONE", text_color=color.new(#DDE4F0,0), text_size=size.small, bgcolor=C_TBL_BG_DATA)
-    table.cell(hm_tbl, 0,  9, "ENTRY VALID",        text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
-    table.cell(hm_tbl, 1,  9, state == "ACTIVE" ? "YES" : "NO", text_color=ev_col, text_size=size.small, bgcolor=C_TBL_BG_DATA)
-    table.cell(hm_tbl, 0, 10, "STAGE",              text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
-    table.cell(hm_tbl, 1, 10, state,                text_color=stage_col,            text_size=size.small, bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 0,  2, "HTF PDA",            text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 1,  2, htf_pda_str,          text_color=htf_pda_col,           text_size=size.small, bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 0,  3, "BIAS",               text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 1,  3, bias_str,             text_color=bias_col,              text_size=size.small, bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 0,  4, "BULL PRESS",         text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 1,  4, bull_pct,             text_color=C_TBL_BULL,            text_size=size.small, bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 0,  5, "BEAR PRESS",         text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 1,  5, bear_pct,             text_color=C_TBL_BEAR,            text_size=size.small, bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 0,  6, "EF OTE",            text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 1,  6, in_ote_str,           text_color=in_ote_col,            text_size=size.small, bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 0,  7, "SCORE",              text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 1,  7, str.tostring(score) + " / " + str.tostring(score_threshold), text_color=score_col, text_size=size.small, bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 0,  8, "LIQ SWEEP",          text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 1,  8, sweep_up ? "UP" : sweep_down ? "DOWN" : "NONE", text_color=color.new(#DDE4F0,0), text_size=size.small, bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 0,  9, "MSS STATE",          text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 1,  9, mss_bullish ? "BULL" : mss_bearish ? "BEAR" : "NONE", text_color=color.new(#DDE4F0,0), text_size=size.small, bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 0, 10, "ENTRY VALID",        text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 1, 10, state == "ACTIVE" ? "YES" : "NO", text_color=ev_col, text_size=size.small, bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 0, 11, "STAGE",              text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 1, 11, state,                text_color=stage_col,            text_size=size.small, bgcolor=C_TBL_BG_DATA)
     seq_str = sequence_status
     seq_col = seq_str == "READY" ? C_TBL_BULL : seq_str == "AWAIT MSS" ? color.new(#F5A623,0) : C_TBL_BEAR
-    table.cell(hm_tbl, 0, 11, "SEQUENCE",           text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
-    table.cell(hm_tbl, 1, 11, seq_str,              text_color=seq_col,              text_size=size.small, bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 0, 12, "SEQUENCE",           text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 1, 12, seq_str,              text_color=seq_col,              text_size=size.small, bgcolor=C_TBL_BG_DATA)
 
 // ── SF DRAW DEDUPLICATION ─────────────────────────────────────────
 var array<float> _sf_drawn = array.new_float()
@@ -2221,4 +2294,4 @@ if alert_bar_ready and (ef_pretrig_sell or ef_pretrig_buy)
     _ef_lvl = ef_dist_sweet <= prox_thresh * ef_pre_width ? ef_l0705 : (ef_pretrig_sell ? ef_ote_hi : ef_ote_lo)
     alert("{\"secret\":\"" + webhook_secret + "\",\"signal_type\":\"EF_PRE_TRIGGER\",\"instrument_id\":\"" + syminfo.tickerid + "\",\"symbol\":\"" + syminfo.ticker + "\",\"display_symbol\":\"" + syminfo.ticker + "\",\"pair\":\"" + syminfo.ticker + "\",\"direction\":\"" + (ef_pretrig_sell ? "SELL" : "BUY") + "\",\"level\":" + str.tostring(_ef_lvl) + ",\"ef_mode\":\"" + ef_mode_str + "\",\"ef_high\":" + str.tostring(ef_anchor_high) + ",\"ef_low\":" + str.tostring(ef_anchor_low) + ",\"ef_ote_low\":" + str.tostring(ef_ote_lo) + ",\"ef_ote_high\":" + str.tostring(ef_ote_hi) + ",\"ef_sweet\":" + str.tostring(ef_l0705) + ",\"ef_sl_ref\":" + str.tostring(ef_anchor_dir == 1 ? ef_anchor_low : ef_anchor_high) + ",\"ef_tp1\":" + str.tostring(ef_lm1) + ",\"ef_tp2\":" + str.tostring(ef_lm2) + ",\"market_price\":" + str.tostring(close) + ",\"regime\":\"" + _clean_regime + "\",\"sequence_status\":\"" + sequence_status + "\",\"setup_class\":\"" + _ef_grade + "\",\"setup_quality\":" + str.tostring(_ef_setup_q) + ",\"execution_quality\":" + str.tostring(_ef_exec_q) + ",\"liquidity\":{\"type\":\"" + liquidity_type + "\",\"price\":" + str.tostring(nz(liquidity_price, 0.0)) + "},\"structure\":{\"major_bos\":" + ((_ef_is_buy ? major_bull_close : major_bear_close) ? "true" : "false") + ",\"internal_shift\":" + ((_ef_is_buy ? mss_bullish : mss_bearish) ? "true" : "false") + ",\"choch\":" + (regime == 2 ? "true" : "false") + ",\"session_tag\":\"" + session_tag + "\"},\"poi\":{\"type\":\"" + (_ef_is_buy ? (bull_fvg_support ? "BULL_OB_FVG" : "BULL_OB") : (bear_fvg_support ? "BEAR_OB_FVG" : "BEAR_OB")) + "\",\"high\":" + str.tostring(nz(_ef_is_buy ? bull_poi_high : bear_poi_high, 0.0)) + ",\"low\":" + str.tostring(nz(_ef_is_buy ? bull_poi_low : bear_poi_low, 0.0)) + ",\"freshness_bars\":" + str.tostring(nz(_ef_is_buy ? last_bear_age : last_bull_age, 999)) + ",\"has_adjacent_fvg\":" + ((_ef_is_buy ? bull_fvg_support : bear_fvg_support) ? "true" : "false") + "},\"timestamp\":\"" + str.tostring(time) + "\"}", alert.freq_once_per_bar_close)
 
-// End of SMC SuperFib v10.9
+// End of SMC SuperFib v10.13.0
