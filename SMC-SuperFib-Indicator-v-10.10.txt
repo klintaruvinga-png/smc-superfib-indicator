@@ -1,8 +1,23 @@
 //@version=6
-indicator("SMC SuperFib v10.11 – Indicator Integrity", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500, max_bars_back=5000)
+indicator("SMC SuperFib v10.12 – SF Engine Redesign", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500, max_bars_back=5000)
 
 // ═══════════════════════════════════════════════════════════════════
-// SMC SuperFib v10.11 — Indicator Integrity Rebuild
+// SMC SuperFib v10.12 — SF Engine Redesign
+//
+// v10.12 CHANGES (over v10.11):
+//   REDESIGN — SF engine rebuilt as a true 3-stage architecture:
+//     Stage 1 (Anchor Engine): confluence across F1/F2/F3 builds ONE
+//              weighted-average SF high/low anchor. Requires >= 2 valid
+//              fibs. Confluence gates only SF existence, not level visibility.
+//     Stage 2 (Ladder Engine): full canonical SF ladder iterates every
+//              level in fib_ratios unconditionally. No confluence gating
+//              of individual levels.
+//     Stage 3 (Star Engine): stars assigned by distance from equilibrium
+//              (50%) via f_ede_tier. Monotonic enforcement via running-max
+//              per side. Color tier capped by anchor quality (_valid_count).
+//   REMOVED — 3-star / 2-star / 1-star confluence-loop draw gating.
+//   REMOVED — F3 fallback confluence filter (_conf >= 2 gate).
+//   RESULT  — If SF valid: full ladder prints. If invalid: nothing prints.
 //
 // v10.11 CHANGES (over v10.10 – all previous patches preserved):
 //   FIX 1 — Compression guard: min swing range (pips) + displacement
@@ -2051,149 +2066,89 @@ if barstate.islast
             // v10.10: Use dynamic fib_level_count instead of hardcoded 20
             _sf_max = fib_level_count - 1
 
-            // PATCH G: Use sf_side() for matching (ignores chop zone)
-            // 3-star
-            for i = 0 to _sf_max
-                p1 = _sf_f1 ? sf_key(f1_high, f1_low, i) : na
-                s1 = _sf_f1 ? sf_side(nz(p1), f1_high, f1_low) : 0
-                for j = 0 to _sf_max
-                    p2 = _sf_f2 ? sf_key(f2_high, f2_low, j) : na
-                    s2 = _sf_f2 ? sf_side(nz(p2), f2_high, f2_low) : 0
-                    for k = 0 to _sf_max
-                        p3 = _sf_f3 ? sf_key(f3_high, f3_low, k) : na
-                        s3 = _sf_f3 ? sf_side(nz(p3), f3_high, f3_low) : 0
-                        _m12 = _sf_f1 and _sf_f2 and s1 != 0 and s1 == s2 and math.abs(nz(p1) - nz(p2)) <= _w
-                        _m13 = _sf_f1 and _sf_f3 and s1 != 0 and s1 == s3 and math.abs(nz(p1) - nz(p3)) <= _w
-                        if _m12 and _m13
-                            _avg3 = (nz(p1)+nz(p2)+nz(p3))/3
-                            if not sf_is_dup(_avg3, _half)
-                                // Use sf_zone for display (preserves chop visual)
-                                z1_disp = sf_zone(nz(p1), f1_high, f1_low)
-                                sf_draw_t(_avg3, _half, 3, z1_disp, _x_sf, f3_high, f3_low, i)
-                                array.push(_sf_drawn, _avg3)
+            // ── SF ENGINE v10.12 — 3-STAGE REDESIGN ──────────────────
+            // Stage 1: Confluence Anchor Engine
+            // Use F1/F2/F3 validity to build ONE weighted-average anchor.
+            // Confluence controls only whether SF exists and what hi/lo are.
+            _valid_count = (_sf_f1 ? 1 : 0) + (_sf_f2 ? 1 : 0) + (_sf_f3 ? 1 : 0)
+            _sf_valid    = _valid_count >= 2
 
-            // 2-star F1+F2 and F1+F3
-            for i = 0 to _sf_max
-                p1 = _sf_f1 ? sf_key(f1_high, f1_low, i) : na
-                s1 = _sf_f1 ? sf_side(nz(p1), f1_high, f1_low) : 0
-                for j = 0 to _sf_max
-                    p2 = _sf_f2 ? sf_key(f2_high, f2_low, j) : na
-                    s2 = _sf_f2 ? sf_side(nz(p2), f2_high, f2_low) : 0
-                    if _sf_f1 and _sf_f2 and s1 != 0 and s1 == s2 and math.abs(nz(p1) - nz(p2)) <= _w
-                        _is_triple = false
-                        if _sf_f3
-                            for k = 0 to _sf_max
-                                p3 = sf_key(f3_high, f3_low, k)
-                                s3 = sf_side(nz(p3), f3_high, f3_low)
-                                if s3 == s1 and math.abs(nz(p1) - nz(p3)) <= _w
-                                    _is_triple := true
-                                    break
-                        if not _is_triple
-                            _avg12 = (nz(p1)+nz(p2))/2
-                            if not sf_is_dup(_avg12, _half)
-                                z1_disp = sf_zone(nz(p1), f1_high, f1_low)
-                                sf_draw_t(_avg12, _half, 2, z1_disp, _x_sf, f1_high, f1_low, i)
-                                array.push(_sf_drawn, _avg12)
-                for k = 0 to _sf_max
-                    p3 = _sf_f3 ? sf_key(f3_high, f3_low, k) : na
-                    s3 = _sf_f3 ? sf_side(nz(p3), f3_high, f3_low) : 0
-                    if _sf_f1 and _sf_f3 and s1 != 0 and s1 == s3 and math.abs(nz(p1) - nz(p3)) <= _w
-                        _is_triple2 = false
-                        if _sf_f2
-                            for j2 = 0 to _sf_max
-                                p2b = sf_key(f2_high, f2_low, j2)
-                                s2b = sf_side(nz(p2b), f2_high, f2_low)
-                                if s2b == s1 and math.abs(nz(p1) - nz(p2b)) <= _w
-                                    _is_triple2 := true
-                                    break
-                        if not _is_triple2
-                            _avg13 = (nz(p1)+nz(p3))/2
-                            if not sf_is_dup(_avg13, _half)
-                                z1_disp = sf_zone(nz(p1), f1_high, f1_low)
-                                sf_draw_t(_avg13, _half, 2, z1_disp, _x_sf, f1_high, f1_low, i)
-                                array.push(_sf_drawn, _avg13)
+            float _sf_anchor_hi = na
+            float _sf_anchor_lo = na
 
-            // 2-star F2+F3
-            for j = 0 to _sf_max
-                p2 = _sf_f2 ? sf_key(f2_high, f2_low, j) : na
-                s2 = _sf_f2 ? sf_side(nz(p2), f2_high, f2_low) : 0
-                for k = 0 to _sf_max
-                    p3 = _sf_f3 ? sf_key(f3_high, f3_low, k) : na
-                    s3 = _sf_f3 ? sf_side(nz(p3), f3_high, f3_low) : 0
-                    if _sf_f2 and _sf_f3 and s2 != 0 and s2 == s3 and math.abs(nz(p2) - nz(p3)) <= _w
-                        _is_triple3 = false
-                        if _sf_f1
-                            for i2 = 0 to _sf_max
-                                p1b = sf_key(f1_high, f1_low, i2)
-                                s1b = sf_side(nz(p1b), f1_high, f1_low)
-                                if s1b == s2 and math.abs(nz(p2) - nz(p1b)) <= _w
-                                    _is_triple3 := true
-                                    break
-                        if not _is_triple3
-                            _avg23 = (nz(p2)+nz(p3))/2
-                            if not sf_is_dup(_avg23, _half)
-                                z2_disp = sf_zone(nz(p2), f2_high, f2_low)
-                                sf_draw_t(_avg23, _half, 2, z2_disp, _x_sf, f2_high, f2_low, j)
-                                array.push(_sf_drawn, _avg23)
+            if _sf_valid
+                float _sum_hi = 0.0
+                float _sum_lo = 0.0
+                float _cnt    = 0.0
+                if _sf_f1
+                    _sum_hi := _sum_hi + f1_high
+                    _sum_lo := _sum_lo + f1_low
+                    _cnt    := _cnt + 1.0
+                if _sf_f2
+                    _sum_hi := _sum_hi + f2_high
+                    _sum_lo := _sum_lo + f2_low
+                    _cnt    := _cnt + 1.0
+                if _sf_f3
+                    _sum_hi := _sum_hi + f3_high
+                    _sum_lo := _sum_lo + f3_low
+                    _cnt    := _cnt + 1.0
+                _sf_anchor_hi := _sum_hi / _cnt
+                _sf_anchor_lo := _sum_lo / _cnt
 
-            // 1-star (uses dynamic level count)
-            if show_sf_1star and _den_full
-                for fib_idx = 1 to 3
-                    fh = fib_idx == 1 ? f1_high : fib_idx == 2 ? f2_high : f3_high
-                    fl = fib_idx == 1 ? f1_low  : fib_idx == 2 ? f2_low  : f3_low
-                    _active = (fib_idx == 1 and _sf_f1) or (fib_idx == 2 and _sf_f2) or (fib_idx == 3 and _sf_f3)
-                    if _active
-                        for ki = 0 to _sf_max
-                            pk = sf_key(fh, fl, ki)
-                            zk = sf_zone(nz(pk), fh, fl)
-                            if zk != 0
-                                _covered = false
-                                for other = 1 to 3
-                                    if other != fib_idx
-                                        oh = other == 1 ? f1_high : other == 2 ? f2_high : f3_high
-                                        ol = other == 1 ? f1_low  : other == 2 ? f2_low  : f3_low
-                                        _o_active = (other == 1 and _sf_f1) or (other == 2 and _sf_f2) or (other == 3 and _sf_f3)
-                                        if _o_active
-                                            for oi = 0 to _sf_max
-                                                op = sf_key(oh, ol, oi)
-                                                oz = sf_zone(nz(op), oh, ol)
-                                                if oz == zk and math.abs(nz(pk) - nz(op)) <= _w
-                                                    _covered := true
-                                                    break
-                                if not _covered
-                                    sf_draw_t(nz(pk), _half, 1, zk, _x_sf, fh, fl, ki)
-                                    array.push(_sf_drawn, nz(pk))
+            // Stage 2+3: Full Ladder + Equilibrium Star Engine
+            // Iterates every level in fib_ratios — no confluence gating.
+            // Stars: f_ede_tier (distance from 50%), monotonic per side,
+            // capped by anchor quality (_valid_count = 2 → max color 2,
+            // _valid_count = 3 → max color 3).
+            if _sf_valid and not na(_sf_anchor_hi) and not na(_sf_anchor_lo) and _sf_anchor_hi > _sf_anchor_lo
 
-            // Fill any remaining SF ladder levels from the F3 anchor using
-            // confluence counts computed against the active F1/F2/F3 ladders.
-            if _sf_f3
-                for ki = 0 to _sf_max
-                    pk = sf_key(f3_high, f3_low, ki)
-                    sk = sf_side(nz(pk), f3_high, f3_low)
-                    _conf = 1
-                    _hit_f1 = false
-                    _hit_f2 = false
-                    if _sf_f1
-                        for oi1 = 0 to _sf_max
-                            op1 = sf_key(f1_high, f1_low, oi1)
-                            os1 = sf_side(nz(op1), f1_high, f1_low)
-                            if os1 == sk and math.abs(nz(pk) - nz(op1)) <= _w
-                                _hit_f1 := true
-                                break
-                    if _sf_f2
-                        for oi2 = 0 to _sf_max
-                            op2 = sf_key(f2_high, f2_low, oi2)
-                            os2 = sf_side(nz(op2), f2_high, f2_low)
-                            if os2 == sk and math.abs(nz(pk) - nz(op2)) <= _w
-                                _hit_f2 := true
-                                break
-                    _conf += _hit_f1 ? 1 : 0
-                    _conf += _hit_f2 ? 1 : 0
-                    _draw_level = _conf >= 2 or (show_sf_1star and _den_full)
-                    if _draw_level and not sf_is_dup(nz(pk), _half)
-                        _disp_zone = sk == 1 ? 1 : -1
-                        sf_draw_t(nz(pk), _half, _conf, _disp_zone, _x_sf, f3_high, f3_low, ki)
-                        array.push(_sf_drawn, nz(pk))
+                // Find index of the 0.5 (50%) level in fib_ratios
+                int _idx50 = 0
+                for _si = 0 to _sf_max
+                    if math.abs(array.get(fib_ratios, _si) - 0.5) < 0.001
+                        _idx50 := _si
+                        break
+
+                // Running-max monotonic enforcement per side
+                int _mono_sell = 0
+                int _mono_buy  = 0
+
+                // Sell-side: indices (_idx50-1) → 0  (ratio < 0.5, price > midpoint)
+                // Walk closest-to-50% first so running-max enforces outward monotonicity
+                if _idx50 > 0
+                    for _si = _idx50 - 1 to 0
+                        _lp = sf_key(_sf_anchor_hi, _sf_anchor_lo, _si)
+                        if not na(_lp)
+                            _zone      = sf_zone(_lp, _sf_anchor_hi, _sf_anchor_lo)
+                            _tier      = f_ede_tier(_lp, _sf_anchor_hi, _sf_anchor_lo)
+                            _tier      := math.max(_tier, _mono_sell)
+                            _mono_sell := _tier
+                            _ctier     = _tier <= 1 ? 1 : _tier <= 3 ? 2 : 3
+                            _ctier     := math.min(_ctier, _valid_count)
+                            if not sf_is_dup(_lp, _half)
+                                sf_draw_t(_lp, _half, _ctier, _zone, _x_sf, _sf_anchor_hi, _sf_anchor_lo, _si)
+                                array.push(_sf_drawn, _lp)
+
+                // Buy-side: indices (_idx50+1) → _sf_max  (ratio > 0.5, price < midpoint)
+                if _idx50 < _sf_max
+                    for _bi = _idx50 + 1 to _sf_max
+                        _lp = sf_key(_sf_anchor_hi, _sf_anchor_lo, _bi)
+                        if not na(_lp)
+                            _zone     = sf_zone(_lp, _sf_anchor_hi, _sf_anchor_lo)
+                            _tier     = f_ede_tier(_lp, _sf_anchor_hi, _sf_anchor_lo)
+                            _tier     := math.max(_tier, _mono_buy)
+                            _mono_buy := _tier
+                            _ctier    = _tier <= 1 ? 1 : _tier <= 3 ? 2 : 3
+                            _ctier    := math.min(_ctier, _valid_count)
+                            if not sf_is_dup(_lp, _half)
+                                sf_draw_t(_lp, _half, _ctier, _zone, _x_sf, _sf_anchor_hi, _sf_anchor_lo, _bi)
+                                array.push(_sf_drawn, _lp)
+
+                // Equilibrium (50%) — always drawn, always lightest (tier 0 → color 1)
+                _lp50 = sf_key(_sf_anchor_hi, _sf_anchor_lo, _idx50)
+                if not na(_lp50) and not sf_is_dup(_lp50, _half)
+                    sf_draw_t(_lp50, _half, 1, 0, _x_sf, _sf_anchor_hi, _sf_anchor_lo, _idx50)
+                    array.push(_sf_drawn, _lp50)
 
 // ═══════════════════════════════════════════════════════════════════
 // ALERTS
