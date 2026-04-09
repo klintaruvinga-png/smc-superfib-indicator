@@ -98,7 +98,6 @@ show_f1_inp       = input.bool(false, "Show Fib 1 (oldest — thick)", group=GV,
 show_f2_inp       = input.bool(false, "Show Fib 2 (swap — purple)",  group=GV, display=display.none)
 show_f3_inp       = input.bool(true,  "Show Fib 3 (recent — thin)",  group=GV, display=display.none)
 show_superfib_inp = input.bool(true,  "Show SuperFib zones",         group=GV, display=display.none)
-show_ict_fib_inp  = input.bool(false, "Show ICT OTE fib",            group=GV, display=display.none)
 show_ef           = input.bool(true,  "Show Entry Fib (EF)",         group=GV, display=display.none)
 
 // ── INPUTS — EF Pre-Trigger ─────────────────────────────────────────
@@ -135,8 +134,11 @@ ov_f3_low  = input.price(0.0, "Fib 3 Low",  group=GO, display=display.none)
 
 // ── INPUTS — EF Colours ────────────────────────────────────────────
 var GEF = "Entry Fib (EF) Colours"
-ef_show_mode = input.bool(true, "Show EF mode label",  group=GEF, display=display.none)
 ef_lbl_size  = input.string("small", "EF label size", options=["tiny","small","normal","large"], group=GEF, display=display.none)
+show_ef_labels   = input.bool(true,  "Show EF labels", group=GEF, display=display.none)
+show_ef_targets  = input.bool(true,  "Show EF targets", group=GEF, display=display.none)
+show_ef_ote_zone = input.bool(true,  "Show EF OTE zone", group=GEF, display=display.none)
+show_ef_sltp     = input.bool(true,  "Show EF SL/TP refs", group=GEF, display=display.none)
 ef_col_prem  = input.color(color.new(color.red,   35), "EF premium colour", group=GEF, display=display.none)
 ef_col_disc  = input.color(color.new(color.green, 35), "EF discount colour",group=GEF, display=display.none)
 ef_col_chop  = input.color(color.new(color.gray,  55), "EF chop colour",    group=GEF, display=display.none)
@@ -146,9 +148,10 @@ var GEF_PROX = "EF Proximity"
 ef_prox_pips_usd = input.float(15.0, "Proximity pips (USD)", minval=5.0, maxval=50.0, step=1.0, group=GEF_PROX, display=display.none)
 ef_prox_pips_jpy = input.float(40.0, "Proximity pips (JPY)", minval=10.0, maxval=100.0, step=1.0, group=GEF_PROX, display=display.none)
 ef_pre_width     = input.float(1.5,  "Pre‑trigger width (× prox)", minval=1.0, maxval=3.0, step=0.1, group=GEF_PROX, display=display.none)
-ef_use_rolling   = input.bool(false, "Use rolling window for EF anchors (vs year H/L)", group=GEF_PROX, display=display.none)
-ef_lookback      = input.int(30,     "EF rolling lookback (bars)",   minval=20, maxval=50, step=5,   group=GEF_PROX, display=display.none)
-ef_impulse_mult  = input.float(1.5,  "Mode B force threshold (× ATR)", minval=0.5, maxval=5.0, step=0.1, group=GEF_PROX, display=display.none)
+ef_min_range_pips = input.float(20.0, "EF minimum execution leg (pips)", minval=5.0, maxval=300.0, step=1.0, group=GEF_PROX, display=display.none)
+ef_disp_mult     = input.float(1.2,  "EF displacement threshold (× ATR)", minval=0.5, maxval=5.0, step=0.1, group=GEF_PROX, display=display.none)
+ef_fresh_bars    = input.int(80,     "EF leg freshness (bars)", minval=10, maxval=400, group=GEF_PROX, display=display.none)
+ef_fallback_year = input.bool(true,  "Fallback to current-year anchors if no valid execution leg", group=GEF_PROX, display=display.none)
 
 // ── INPUTS — SL/TP ─────────────────────────────────────────────────
 var GSLTP = "SL/TP Display"
@@ -572,12 +575,12 @@ if barstate.islast
     f2_name := _f2_expanded ? "SWAP ⚠" : "SWAP"
 
 // ═══════════════════════════════════════════════════════════════════
-// ENTRY FIB (EF) — SWAP S1 ↔ current year
+// ENTRY FIB (EF) — ICT execution leg anchors (single execution fib)
 // ═══════════════════════════════════════════════════════════════════
 var float ef_curr_year_high = na
 var float ef_curr_year_low  = na
 
-// PATCH L: Fix first-bar reset poison – require a previous bar to detect new year
+// Year fallback cache (non-primary)
 ef_is_new_year = not na(time[1]) and year(time, "America/New_York") != year(time[1], "America/New_York")
 if ef_is_new_year
     ef_curr_year_high := high
@@ -586,37 +589,61 @@ else
     ef_curr_year_high := math.max(nz(ef_curr_year_high), high)
     ef_curr_year_low  := math.min(nz(ef_curr_year_low),  low)
 
-// ── EF LIVE SWING ANCHORS (rolling window alternative) ─────────────
-ef_roll_high = ta.highest(high, ef_lookback)
-ef_roll_low  = ta.lowest(low,  ef_lookback)
-ef_anchor_h  = ef_use_rolling ? ef_roll_high : ef_curr_year_high
-ef_anchor_l  = ef_use_rolling ? ef_roll_low  : ef_curr_year_low
+ef_atr_now = ta.atr(14)
+ef_leg_min = ef_min_range_pips * pip_mult
 
-// Impulse detection for Mode B priority
-ef_atr_now  = ta.atr(14)
-ef_impulse  = math.abs(close - close[1]) > ef_atr_now * ef_impulse_mult
+// Candidate execution legs must be impulse + MSS + sweep context
+bull_leg_low  = nz(last_swing_low, low)
+bull_leg_high = high
+bear_leg_high = nz(last_swing_high, high)
+bear_leg_low  = low
+
+bull_leg_range = math.abs(bull_leg_high - bull_leg_low)
+bear_leg_range = math.abs(bear_leg_high - bear_leg_low)
+
+bull_leg_valid = sweep_down and mss_bullish and bull_leg_range >= ef_leg_min and (close - bull_leg_low) >= ef_atr_now * ef_disp_mult
+bear_leg_valid = sweep_up and mss_bearish and bear_leg_range >= ef_leg_min and (bear_leg_high - close) >= ef_atr_now * ef_disp_mult
+
+var float ef_anchor_low  = na
+var float ef_anchor_high = na
+var int   ef_anchor_dir  = 0   // 1 bull, -1 bear
+var int   ef_anchor_bar  = na
+
+if bull_leg_valid
+    ef_anchor_low  := bull_leg_low
+    ef_anchor_high := bull_leg_high
+    ef_anchor_dir  := 1
+    ef_anchor_bar  := bar_index
+else if bear_leg_valid
+    ef_anchor_low  := bear_leg_low
+    ef_anchor_high := bear_leg_high
+    ef_anchor_dir  := -1
+    ef_anchor_bar  := bar_index
+
+if ef_fallback_year and (na(ef_anchor_low) or na(ef_anchor_high) or (bar_index - nz(ef_anchor_bar, bar_index)) > ef_fresh_bars)
+    if not na(ef_curr_year_high) and not na(ef_curr_year_low)
+        ef_anchor_low  := ef_curr_year_low
+        ef_anchor_high := ef_curr_year_high
+        ef_anchor_dir  := close >= (ef_curr_year_high + ef_curr_year_low) * 0.5 ? 1 : -1
+        ef_anchor_bar  := bar_index
 
 var float ef_0   = na
 var float ef_100 = na
-
-if not na(ef_anchor_h) and not na(ef_anchor_l) and not na(s1_high) and not na(s1_low)
-    if ef_impulse
-        // Mode B — force swap direction on strong impulse
-        ef_0   := f3_bull ? s1_high : s1_low
-        ef_100 := f3_bull ? ef_anchor_l : ef_anchor_h
-    else if f3_bull
-        ef_0   := s1_low
-        ef_100 := ef_anchor_h
+if not na(ef_anchor_low) and not na(ef_anchor_high) and ef_anchor_high > ef_anchor_low
+    if ef_anchor_dir == 1
+        ef_0   := ef_anchor_low
+        ef_100 := ef_anchor_high
     else
-        ef_0   := s1_high
-        ef_100 := ef_anchor_l
+        ef_0   := ef_anchor_high
+        ef_100 := ef_anchor_low
 else
     ef_0   := na
     ef_100 := na
 
 ef_range     = math.abs(ef_100 - ef_0)
 ef_ascending = ef_100 > ef_0
-ef_mode_str  = ef_impulse ? "B" : (not na(ef_range) and ef_range > (ef_anchor_h - ef_anchor_l) * 0.9 ? "C" : "A")
+ef_is_bull   = ef_anchor_dir == 1
+ef_mode_str  = ef_is_bull ? "BULL_EXEC" : ef_anchor_dir == -1 ? "BEAR_EXEC" : "NONE"
 
 ef_lvl(ratio) =>
     if ef_ascending
@@ -625,33 +652,43 @@ ef_lvl(ratio) =>
         ef_0 - ef_range * ratio
 
 ef_l000   = ef_lvl(0.000)
-ef_l025   = ef_lvl(0.250)
-ef_l0375  = ef_lvl(0.375)
 ef_l050   = ef_lvl(0.500)
-ef_l0625  = ef_lvl(0.625)
-ef_l075   = ef_lvl(0.750)
+ef_l062   = ef_lvl(0.620)
+ef_l0705  = ef_lvl(0.705)
+ef_l079   = ef_lvl(0.790)
 ef_l100   = ef_lvl(1.000)
-ef_lm025  = ef_lvl(-0.250)
-ef_lm0625 = ef_lvl(-0.625)
-ef_lm1625 = ef_lvl(-1.625)
-ef_l125   = ef_lvl(1.250)
-ef_l1625  = ef_lvl(1.625)
+ef_lm1    = ef_lvl(2.000)
+ef_lm2    = ef_lvl(3.000)
+ef_lm25   = ef_lvl(3.500)
+ef_lm4    = ef_lvl(5.000)
+
+// Compatibility aliases for legacy scoring paths
+ef_l0625 = ef_l062
+ef_l075  = ef_l0705
+ef_l0375 = ef_lvl(0.375)
+ef_l025  = ef_lvl(0.250)
+
+ef_ote_lo = math.min(ef_l062, ef_l079)
+ef_ote_hi = math.max(ef_l062, ef_l079)
 
 prox_pips   = pip_type == "JPY" ? ef_prox_pips_jpy : ef_prox_pips_usd
 prox_thresh = prox_pips * pip_mult
 
-ef_dist_625 = math.abs(close - ef_l0625)
-ef_dist_750 = math.abs(close - ef_l075)
-ef_dist_375 = math.abs(close - ef_l0375)
-ef_dist_250 = math.abs(close - ef_l025)
+ef_dist_ote_lo = math.abs(close - ef_ote_lo)
+ef_dist_ote_hi = math.abs(close - ef_ote_hi)
+ef_dist_sweet  = math.abs(close - ef_l0705)
 
-ef_near_entry_sell = (ef_dist_625 <= prox_thresh or ef_dist_750 <= prox_thresh)
-ef_near_entry_buy  = (ef_dist_375 <= prox_thresh or ef_dist_250 <= prox_thresh)
+ef_in_ote_zone     = not na(ef_ote_lo) and not na(ef_ote_hi) and close >= ef_ote_lo and close <= ef_ote_hi
+ef_near_sweet_spot = ef_dist_sweet <= prox_thresh
+
+ef_near_entry_buy  = ef_anchor_dir == 1 and (ef_in_ote_zone or ef_near_sweet_spot)
+ef_near_entry_sell = ef_anchor_dir == -1 and (ef_in_ote_zone or ef_near_sweet_spot)
 ef_near_entry      = ef_near_entry_sell or ef_near_entry_buy
 
-ef_pre_trigger_raw = (ef_dist_625 <= prox_thresh * ef_pre_width or ef_dist_750 <= prox_thresh * ef_pre_width) or
-                     (ef_dist_375 <= prox_thresh * ef_pre_width or ef_dist_250 <= prox_thresh * ef_pre_width)
+ef_pre_trigger_raw = (ef_dist_ote_lo <= prox_thresh * ef_pre_width or ef_dist_ote_hi <= prox_thresh * ef_pre_width or ef_dist_sweet <= prox_thresh * ef_pre_width)
 
+ict_in_ote_buy  = ef_near_entry_buy
+ict_in_ote_sell = ef_near_entry_sell
 // ── ICT STRUCTURE ENGINE ───────────────────────────────────────────
 ict_ph = ta.pivothigh(high, ict_struct_lb, ict_struct_lb)
 ict_pl = ta.pivotlow(low,   ict_struct_lb, ict_struct_lb)
@@ -708,8 +745,6 @@ ict_l100  = ict_ote_lvl(1.000)
 ict_lm027 = ict_ote_lvl(-0.270)
 ict_lm062 = ict_ote_lvl(-0.620)
 
-ict_in_ote_sell = not na(ict_l0705) and not na(ict_l079) and ict_using_bear_leg and high >= ict_l0705 and high <= ict_l079
-ict_in_ote_buy  = not na(ict_l0705) and not na(ict_l079) and ict_using_bull_leg and low  <= ict_l079  and low  >= ict_l0705
 
 // ── HEATMAP MATH ───────────────────────────────────────────────────
 fib_pressure_component(fib_hi, fib_lo) =>
@@ -1378,44 +1413,44 @@ draw_fib_t(x_t, hi, lo, is_swap, point_up, lw_base, fib_name) =>
 
 draw_ef_dotted_t(x_t) =>
     if not na(ef_0) and not na(ef_100) and ef_0 != ef_100
-        hi  = ef_ascending ? ef_100 : ef_0
-        lo  = ef_ascending ? ef_0   : ef_100
-        rng = math.abs(hi - lo)
-        if show_ext
-            draw_hline_t(x_t, hi+rng*1.625, ef_col_prem, 1, line.style_dotted)
-            draw_hline_t(x_t, hi+rng*0.625, ef_col_prem, 1, line.style_dotted)
-            draw_hline_t(x_t, hi+rng*0.25,  ef_col_prem, 1, line.style_dotted)
-        draw_hline_t(x_t, hi,                 ef_col_prem, 1, line.style_dotted)
-        draw_hline_t(x_t, f_lvl(hi,lo,0.25),  ef_col_prem, 1, line.style_dotted)
-        draw_hline_t(x_t, f_lvl(hi,lo,0.375), ef_col_chop, 1, line.style_dotted)
-        draw_hline_t(x_t, f_lvl(hi,lo,0.5),   color.new(color.gray,50), 1, line.style_dotted)
-        draw_hline_t(x_t, f_lvl(hi,lo,0.625), ef_col_disc, 1, line.style_dotted)
-        draw_hline_t(x_t, f_lvl(hi,lo,0.75),  ef_col_disc, 1, line.style_dotted)
-        draw_hline_t(x_t, lo,                  ef_col_disc, 1, line.style_dotted)
-        if show_ext
-            draw_hline_t(x_t, lo-rng*0.25,  ef_col_disc, 1, line.style_dotted)
-            draw_hline_t(x_t, lo-rng*0.625, ef_col_disc, 1, line.style_dotted)
-            draw_hline_t(x_t, lo-rng*1.625, ef_col_disc, 1, line.style_dotted)
+        _lvl0    = ef_l000
+        _lvl50   = ef_l050
+        _lvl62   = ef_l062
+        _lvl705  = ef_l0705
+        _lvl79   = ef_l079
+        _lvl100  = ef_l100
+        _sl_ref  = ef_is_bull ? ef_anchor_low : ef_anchor_high
+        draw_hline_t(x_t, _lvl0,   ef_col_prem, 2, line.style_solid)
+        draw_hline_t(x_t, _lvl50,  color.new(color.gray,35), 1, line.style_dotted)
+        draw_hline_t(x_t, _lvl62,  ef_col_chop, 1, line.style_solid)
+        draw_hline_t(x_t, _lvl705, C_ICT_OTE, 2, line.style_solid)
+        draw_hline_t(x_t, _lvl79,  ef_col_disc, 1, line.style_solid)
+        draw_hline_t(x_t, _lvl100, ef_col_disc, 2, line.style_solid)
+        if show_ef_ote_zone
+            box.new(x_t - _back_extension, ef_ote_hi, x_t, ef_ote_lo, xloc=xloc.bar_time, border_color=C_ICT_OTE, bgcolor=color.new(C_ICT_OTE,85), border_width=2)
+        if show_ef_targets and show_ext
+            draw_hline_t(x_t, ef_lm1,  C_TP_LINE, 1, line.style_dashed)
+            draw_hline_t(x_t, ef_lm2,  C_TP_LINE, 1, line.style_dashed)
+            if _den_full
+                draw_hline_t(x_t, ef_lm25, C_TP_LINE, 1, line.style_dotted)
+                draw_hline_t(x_t, ef_lm4,  C_TP_LINE, 1, line.style_dotted)
+        if show_ef_sltp
+            draw_hline_t(x_t, _sl_ref, C_SL_LINE, 1, line.style_dotted)
         sz_ef = ef_lbl_size == "tiny" ? size.tiny : ef_lbl_size == "large" ? size.large : ef_lbl_size == "normal" ? size.normal : size.small
-        if show_labels
-            int    _ef0_stars   = f_hybrid_stars(hi,                 hi, lo, 1)
-            int    _ef375_stars = f_hybrid_stars(f_lvl(hi,lo,0.375), hi, lo, 1)
-            int    _ef625_stars = f_hybrid_stars(f_lvl(hi,lo,0.625), hi, lo, 1)
-            int    _ef100_stars = f_hybrid_stars(lo,                 hi, lo, 1)
-            label.new(x_t + f_label_pad_ms(), hi,                 "EF 0% @ "    + str.tostring(hi,                 format.mintick) + " " + f_star_label(_ef0_stars),   xloc=xloc.bar_time, style=label.style_label_lower_left, color=color.new(color.white,100), textcolor=ef_col_prem, size=sz_ef)
-            label.new(x_t + f_label_pad_ms(), f_lvl(hi,lo,0.375),"EF 37.5% @ " + str.tostring(f_lvl(hi,lo,0.375), format.mintick) + " " + f_star_label(_ef375_stars), xloc=xloc.bar_time, style=label.style_label_lower_left, color=color.new(color.white,100), textcolor=ef_col_chop, size=sz_ef)
-            label.new(x_t + f_label_pad_ms(), f_lvl(hi,lo,0.625),"EF 62.5% @ " + str.tostring(f_lvl(hi,lo,0.625), format.mintick) + " " + f_star_label(_ef625_stars), xloc=xloc.bar_time, style=label.style_label_lower_left, color=color.new(color.white,100), textcolor=ef_col_disc, size=sz_ef)
-            label.new(x_t + f_label_pad_ms(), lo,                 "EF 100% @ "  + str.tostring(lo,                  format.mintick) + " " + f_star_label(_ef100_stars), xloc=xloc.bar_time, style=label.style_label_lower_left, color=color.new(color.white,100), textcolor=ef_col_disc, size=sz_ef)
-            if show_ede_arrows
-                _ef_tf_bump = timeframe.in_seconds() >= 86400 ? 0 : timeframe.in_seconds() >= 3600 ? 1 : 2
-                if _ef0_stars >= 2
-                    _ef0_idx = (_ef0_stars == 2 ? 0 : _ef0_stars == 3 ? 1 : _ef0_stars == 4 ? 2 : 3) + _ef_tf_bump
-                    _ef0_sz  = _ef0_idx == 0 ? size.small : _ef0_idx == 1 ? size.normal : _ef0_idx == 2 ? size.large : size.huge
-                    label.new(x_t + f_label_pad_ms(), hi, "", xloc=xloc.bar_time, style=label.style_arrowdown, color=ef_col_prem, size=_ef0_sz)
-                if _ef100_stars >= 2
-                    _ef100_idx = (_ef100_stars == 2 ? 0 : _ef100_stars == 3 ? 1 : _ef100_stars == 4 ? 2 : 3) + _ef_tf_bump
-                    _ef100_sz  = _ef100_idx == 0 ? size.small : _ef100_idx == 1 ? size.normal : _ef100_idx == 2 ? size.large : size.huge
-                    label.new(x_t + f_label_pad_ms(), lo, "", xloc=xloc.bar_time, style=label.style_arrowup, color=ef_col_disc, size=_ef100_sz)
+        if show_labels and show_ef_labels
+            _t0   = ef_is_bull ? "EF 0 — Swing Low / Invalidation" : "EF 0 — Swing High / Invalidation"
+            _t100 = ef_is_bull ? "EF 100 — Impulse High" : "EF 100 — Impulse Low"
+            label.new(x_t + f_label_pad_ms(), _lvl0,   _t0   + " @ " + str.tostring(_lvl0, format.mintick),   xloc=xloc.bar_time, style=label.style_label_lower_left, color=color.new(color.white,100), textcolor=ef_col_prem, size=sz_ef)
+            label.new(x_t + f_label_pad_ms(), _lvl50,  "EF 50 — Equilibrium @ " + str.tostring(_lvl50, format.mintick), xloc=xloc.bar_time, style=label.style_label_lower_left, color=color.new(color.white,100), textcolor=color.new(color.gray, 0), size=sz_ef)
+            label.new(x_t + f_label_pad_ms(), _lvl62,  "EF 62 — OTE Start @ " + str.tostring(_lvl62, format.mintick), xloc=xloc.bar_time, style=label.style_label_lower_left, color=color.new(color.white,100), textcolor=ef_col_chop, size=sz_ef)
+            label.new(x_t + f_label_pad_ms(), _lvl705, "EF 70.5 — Sweet Spot @ " + str.tostring(_lvl705, format.mintick), xloc=xloc.bar_time, style=label.style_label_lower_left, color=color.new(color.black,75), textcolor=C_ICT_OTE, size=sz_ef)
+            label.new(x_t + f_label_pad_ms(), _lvl79,  "EF 79 — OTE End @ " + str.tostring(_lvl79, format.mintick), xloc=xloc.bar_time, style=label.style_label_lower_left, color=color.new(color.white,100), textcolor=ef_col_disc, size=sz_ef)
+            label.new(x_t + f_label_pad_ms(), _lvl100, _t100 + " @ " + str.tostring(_lvl100, format.mintick), xloc=xloc.bar_time, style=label.style_label_lower_left, color=color.new(color.white,100), textcolor=ef_col_disc, size=sz_ef)
+            if show_ef_targets and show_ext
+                label.new(x_t + f_label_pad_ms(), ef_lm1, "TP1 — -1 @ " + str.tostring(ef_lm1, format.mintick), xloc=xloc.bar_time, style=label.style_label_lower_left, color=color.new(C_TP_LINE,85), textcolor=color.white, size=sz_ef)
+                label.new(x_t + f_label_pad_ms(), ef_lm2, "TP2 — -2 @ " + str.tostring(ef_lm2, format.mintick), xloc=xloc.bar_time, style=label.style_label_lower_left, color=color.new(C_TP_LINE,85), textcolor=color.white, size=sz_ef)
+                if _den_full
+                    label.new(x_t + f_label_pad_ms(), ef_lm25, "TP3 — -2.5 @ " + str.tostring(ef_lm25, format.mintick), xloc=xloc.bar_time, style=label.style_label_lower_left, color=color.new(C_TP_LINE,90), textcolor=color.white, size=sz_ef)
 
 sf_draw_t(p, half, color_tier, sf_stars_final, zone, x_t, key_idx) =>
     is_sell    = zone >= 1
@@ -1435,26 +1470,6 @@ sf_draw_t(p, half, color_tier, sf_stars_final, zone, x_t, key_idx) =>
             _arrow_size  = _size_idx == 0 ? size.small : _size_idx == 1 ? size.normal : _size_idx == 2 ? size.large : size.huge
             _arrow_color = is_sell ? prem_key : disc_key
             label.new(x_t + f_label_pad_ms(), p, "", xloc=xloc.bar_time, style=_arrow_style, color=_arrow_color, size=_arrow_size)
-
-draw_ict_ote_t(x_t) =>
-    if ict_enabled and show_ict_fib_inp and not na(ict_l000) and not na(ict_l100) and ict_l000 != ict_l100
-        ote_col = C_ICT_OTE
-        draw_hline_t(x_t, ict_l000,  ote_col, 2, line.style_solid)
-        draw_hline_t(x_t, ict_l050,  color.new(ote_col, 40), 1, line.style_solid)
-        draw_hline_t(x_t, ict_l0618, color.new(ote_col, 25), 1, line.style_solid)
-        draw_hline_t(x_t, ict_l0705, ote_col, 2, line.style_solid)
-        draw_hline_t(x_t, ict_l079,  ote_col, 2, line.style_solid)
-        draw_hline_t(x_t, ict_l100,  ote_col, 2, line.style_solid)
-        if show_ext
-            draw_hline_t(x_t, ict_lm027, color.new(ote_col,55), 1, line.style_dashed)
-            draw_hline_t(x_t, ict_lm062, color.new(ote_col,70), 1, line.style_dashed)
-        if not na(ict_l0705) and not na(ict_l079)
-            box.new(x_t - _back_extension, ict_l079, x_t, ict_l0705, xloc=xloc.bar_time, border_color=ote_col, bgcolor=color.new(ote_col,85), border_width=2)
-        sz_ict = lbl_size == "tiny" ? size.tiny : lbl_size == "large" ? size.large : lbl_size == "normal" ? size.normal : size.small
-        if show_labels
-            dir_str = ict_struct_trend == 1 ? " BUY" : ict_struct_trend == -1 ? " SELL" : ""
-            label.new(x_t + f_label_pad_ms(), ict_l0705, "OTE" + dir_str + " @ " + str.tostring(ict_l0705, format.mintick), xloc=xloc.bar_time, style=label.style_label_lower_left, color=color.new(color.black,80), textcolor=ote_col, size=sz_ict)
-            label.new(x_t + f_label_pad_ms(), ict_l050,  "OTE EQ @ "             + str.tostring(ict_l050,  format.mintick), xloc=xloc.bar_time, style=label.style_label_lower_left, color=color.new(color.black,80), textcolor=color.new(ote_col,35), size=sz_ict)
 
 // ── SL/TP HELPERS ──────────────────────────────────────────────────
 sl_buffer_price = pip_type == "JPY" ? sl_buffer_jpy * pip_mult : sl_buffer_usd * pip_mult
@@ -1482,31 +1497,15 @@ get_sl_from_sweep(direction, is_sweep_up, is_sweep_down, swing_hi, swing_lo) =>
 get_tp_price_from_zone(zone_price, direction) =>
     float tp = na
     if direction == "SELL"
-        levels = array.new_float()
-        if not na(ef_l0625)  and ef_l0625  < zone_price - 0.00001
-            array.push(levels, ef_l0625)
-        if not na(ef_l075)   and ef_l075   < zone_price - 0.00001
-            array.push(levels, ef_l075)
-        if not na(ef_l100)   and ef_l100   < zone_price - 0.00001
-            array.push(levels, ef_l100)
-        if not na(f3_low)    and f3_low    < zone_price - 0.00001
-            array.push(levels, f3_low)
-        if array.size(levels) > 0
-            array.sort(levels, order.descending)
-            tp := array.get(levels, 0)
+        if not na(ef_lm1) and ef_lm1 < zone_price
+            tp := ef_lm1
+        else if not na(ef_lm2) and ef_lm2 < zone_price
+            tp := ef_lm2
     else
-        levels = array.new_float()
-        if not na(ef_l000)  and ef_l000  > zone_price + 0.00001
-            array.push(levels, ef_l000)
-        if not na(ef_l025)  and ef_l025  > zone_price + 0.00001
-            array.push(levels, ef_l025)
-        if not na(ef_l0375) and ef_l0375 > zone_price + 0.00001
-            array.push(levels, ef_l0375)
-        if not na(f3_high)  and f3_high  > zone_price + 0.00001
-            array.push(levels, f3_high)
-        if array.size(levels) > 0
-            array.sort(levels)
-            tp := array.get(levels, 0)
+        if not na(ef_lm1) and ef_lm1 > zone_price
+            tp := ef_lm1
+        else if not na(ef_lm2) and ef_lm2 > zone_price
+            tp := ef_lm2
     tp
 
 draw_signal_hybrid(is_bull, model_tag, eff_stars, bias_ok, struct_ok, score_val) =>
@@ -1538,14 +1537,12 @@ compute_score(pz, bst) =>
     if (pz == 1 and ef_near_entry_sell) or (pz == -1 and ef_near_entry_buy)
         ef_al := 2
     else
-        sell_p = pz == 1 and (ef_dist_625 <= prox_thresh * 2 or ef_dist_750 <= prox_thresh * 2)
-        buy_p  = pz == -1 and (ef_dist_375 <= prox_thresh * 2 or ef_dist_250 <= prox_thresh * 2)
+        sell_p = pz == 1 and (ef_dist_ote_lo <= prox_thresh * 2 or ef_dist_sweet <= prox_thresh * 2)
+        buy_p  = pz == -1 and (ef_dist_ote_hi <= prox_thresh * 2 or ef_dist_sweet <= prox_thresh * 2)
         if sell_p or buy_p
             ef_al := 1
     ote_al = 0
-    if pz == 1 and not na(ef_l0625) and not na(ef_l075) and close >= ef_l0625 and close <= ef_l075
-        ote_al := 2
-    else if pz == -1 and not na(ef_l025) and not na(ef_l0375) and close >= ef_l025 and close <= ef_l0375
+    if not na(ef_ote_lo) and not na(ef_ote_hi) and close >= ef_ote_lo and close <= ef_ote_hi
         ote_al := 2
     sb = 0
     if (pz == 1 and ict_struct_trend == -1) or (pz == -1 and ict_struct_trend == 1)
@@ -1938,12 +1935,6 @@ if show_ef_pretrig and (ef_pretrig_sell or ef_pretrig_buy)
     else
         label.new(bar_index, low  - atr14 * 0.6, "⚡ EF BUY ZONE",  style=label.style_label_up,   color=C_PRETRIG, textcolor=color.black, size=sig_sz)
 
-if ict_enabled and show_ict_fib_inp
-    if ict_in_ote_buy and not ict_in_ote_buy[1]
-        label.new(bar_index, low  - atr14 * 0.6, "⚡ OTE BUY",  style=label.style_label_up,   color=C_PRETRIG, textcolor=color.black, size=sig_sz)
-    if ict_in_ote_sell and not ict_in_ote_sell[1]
-        label.new(bar_index, high + atr14 * 0.6, "⚡ OTE SELL", style=label.style_label_down, color=C_PRETRIG, textcolor=color.black, size=sig_sz)
-
 // ═══════════════════════════════════════════════════════════════════
 // HEATMAP TABLE
 // ═══════════════════════════════════════════════════════════════════
@@ -1978,7 +1969,7 @@ if ict_enabled and show_ict_table and barstate.islast
     table.cell(hm_tbl, 1,  3, bull_pct,             text_color=C_TBL_BULL,            text_size=size.small, bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 0,  4, "BEAR PRESS",         text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 1,  4, bear_pct,             text_color=C_TBL_BEAR,            text_size=size.small, bgcolor=C_TBL_BG_DATA)
-    table.cell(hm_tbl, 0,  5, "ICT OTE",            text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 0,  5, "EF OTE",            text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 1,  5, in_ote_str,           text_color=in_ote_col,            text_size=size.small, bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 0,  6, "SCORE",              text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 1,  6, str.tostring(score) + " / " + str.tostring(score_threshold), text_color=score_col, text_size=size.small, bgcolor=C_TBL_BG_DATA)
@@ -2031,16 +2022,8 @@ if barstate.islast
             if (f3_high - f3_low) >= _fib_min_range
                 draw_fib_t(_t3, f3_high, f3_low, false, f3_bull, 1, f3_name)
 
-    if ict_enabled and show_ict_fib_inp and _den_full
-        draw_ict_ote_t(_t6)
-
     if ef_enabled and not na(ef_0) and not na(ef_100) and ef_0 != ef_100 and _den_full
         draw_ef_dotted_t(_t2)
-        if ef_show_mode
-            sz_ef = ef_lbl_size == "tiny" ? size.tiny : ef_lbl_size == "large" ? size.large : ef_lbl_size == "normal" ? size.normal : size.small
-            label.new(_t2, ef_ascending ? ef_100 : ef_0, "EF Mode " + ef_mode_str,
-                      xloc=xloc.bar_time, style=label.style_label_left,
-                      color=ef_impulse ? color.new(color.orange,60) : color.new(color.blue,70), textcolor=color.white, size=sz_ef)
 
     // FIX 1: SuperFib also gated by allowFib
     if show_superfib_inp and _den_ess and allowFib
@@ -2185,8 +2168,8 @@ alertcondition(condition = alert_bar_ready and bool(_chg_trend_up),   title = "S
 alertcondition(condition = alert_bar_ready and bool(_chg_trend_down), title = "Sniper: TREND DOWN")
 alertcondition(condition = alert_bar_ready and bool(_chg_reversal),   title = "Sniper: REVERSAL ZONE")
 alertcondition(condition = alert_bar_ready and bool(_chg_ranging),    title = "Sniper: RANGING")
-alertcondition(condition = alert_bar_ready and ict_in_ote_buy  and not ict_in_ote_buy[1],  title = "ICT: PRE-TRIGGER BUY (OTE)")
-alertcondition(condition = alert_bar_ready and ict_in_ote_sell and not ict_in_ote_sell[1], title = "ICT: PRE-TRIGGER SELL (OTE)")
+alertcondition(condition = alert_bar_ready and ict_in_ote_buy  and not ict_in_ote_buy[1],  title = "EF: PRE-TRIGGER BUY (OTE)")
+alertcondition(condition = alert_bar_ready and ict_in_ote_sell and not ict_in_ote_sell[1], title = "EF: PRE-TRIGGER SELL (OTE)")
 alertcondition(condition = alert_bar_ready and pressure_bias > ict_bias_gate  and pressure_bias[1] <= ict_bias_gate,  title = "Heatmap: BIAS SHIFTED BULL")
 alertcondition(condition = alert_bar_ready and pressure_bias < -ict_bias_gate and pressure_bias[1] >= -ict_bias_gate, title = "Heatmap: BIAS SHIFTED BEAR")
 alertcondition(condition = alert_bar_ready and (ef_pretrig_sell or ef_pretrig_buy), title = "EF: PRE-TRIGGER")
@@ -2197,8 +2180,9 @@ if alert_bar_ready and regime != regime[1]
 if alert_bar_ready and (ef_pretrig_sell or ef_pretrig_buy)
     _ef_is_buy = ef_pretrig_buy
     _ef_setup_q = calc_setup_quality(_ef_is_buy, _ef_is_buy ? major_bull_close : major_bear_close, _ef_is_buy ? bull_poi_fresh : bear_poi_fresh, _ef_is_buy ? bull_fvg_support : bear_fvg_support, _ef_is_buy ? bull_poi_fresh : bear_poi_fresh)
-    _ef_exec_q = calc_execution_quality(ef_pretrig_sell ? (ef_dist_625 <= prox_thresh * ef_pre_width ? ef_l0625 : ef_l075) : (ef_dist_375 <= prox_thresh * ef_pre_width ? ef_l0375 : ef_l025), _ef_is_buy, true)
+    _ef_exec_q = calc_execution_quality(ef_dist_sweet <= prox_thresh * ef_pre_width ? ef_l0705 : (ef_pretrig_sell ? ef_ote_hi : ef_ote_lo), _ef_is_buy, true)
     _ef_grade = grade_setup(_ef_setup_q, _ef_exec_q, true, true, _ef_is_buy ? major_bull_close : major_bear_close)
-    alert("{\"secret\":\"" + webhook_secret + "\",\"signal_type\":\"EF_PRE_TRIGGER\",\"instrument_id\":\"" + syminfo.tickerid + "\",\"symbol\":\"" + syminfo.ticker + "\",\"display_symbol\":\"" + syminfo.ticker + "\",\"pair\":\"" + syminfo.ticker + "\",\"direction\":\"" + (ef_pretrig_sell ? "SELL" : "BUY") + "\",\"level\":" + str.tostring(ef_pretrig_sell ? (ef_dist_625 <= prox_thresh * ef_pre_width ? ef_l0625 : ef_l075) : (ef_dist_375 <= prox_thresh * ef_pre_width ? ef_l0375 : ef_l025)) + ",\"ef_mode\":\"" + ef_mode_str + "\",\"ef_high\":" + str.tostring(ef_ascending ? ef_100 : ef_0) + ",\"ef_low\":" + str.tostring(ef_ascending ? ef_0 : ef_100) + ",\"market_price\":" + str.tostring(close) + ",\"regime\":\"" + _clean_regime + "\",\"sequence_status\":\"" + sequence_status + "\",\"setup_class\":\"" + _ef_grade + "\",\"setup_quality\":" + str.tostring(_ef_setup_q) + ",\"execution_quality\":" + str.tostring(_ef_exec_q) + ",\"liquidity\":{\"type\":\"" + liquidity_type + "\",\"price\":" + str.tostring(nz(liquidity_price, 0.0)) + "},\"structure\":{\"major_bos\":" + ((_ef_is_buy ? major_bull_close : major_bear_close) ? "true" : "false") + ",\"internal_shift\":" + ((_ef_is_buy ? mss_bullish : mss_bearish) ? "true" : "false") + ",\"choch\":" + (regime == 2 ? "true" : "false") + ",\"session_tag\":\"" + session_tag + "\"},\"poi\":{\"type\":\"" + (_ef_is_buy ? (bull_fvg_support ? "BULL_OB_FVG" : "BULL_OB") : (bear_fvg_support ? "BEAR_OB_FVG" : "BEAR_OB")) + "\",\"high\":" + str.tostring(nz(_ef_is_buy ? bull_poi_high : bear_poi_high, 0.0)) + ",\"low\":" + str.tostring(nz(_ef_is_buy ? bull_poi_low : bear_poi_low, 0.0)) + ",\"freshness_bars\":" + str.tostring(nz(_ef_is_buy ? last_bear_age : last_bull_age, 999)) + ",\"has_adjacent_fvg\":" + ((_ef_is_buy ? bull_fvg_support : bear_fvg_support) ? "true" : "false") + "},\"timestamp\":\"" + str.tostring(time) + "\"}", alert.freq_once_per_bar_close)
+    _ef_lvl = ef_dist_sweet <= prox_thresh * ef_pre_width ? ef_l0705 : (ef_pretrig_sell ? ef_ote_hi : ef_ote_lo)
+    alert("{\"secret\":\"" + webhook_secret + "\",\"signal_type\":\"EF_PRE_TRIGGER\",\"instrument_id\":\"" + syminfo.tickerid + "\",\"symbol\":\"" + syminfo.ticker + "\",\"display_symbol\":\"" + syminfo.ticker + "\",\"pair\":\"" + syminfo.ticker + "\",\"direction\":\"" + (ef_pretrig_sell ? "SELL" : "BUY") + "\",\"level\":" + str.tostring(_ef_lvl) + ",\"ef_mode\":\"" + ef_mode_str + "\",\"ef_high\":" + str.tostring(ef_anchor_high) + ",\"ef_low\":" + str.tostring(ef_anchor_low) + ",\"ef_ote_low\":" + str.tostring(ef_ote_lo) + ",\"ef_ote_high\":" + str.tostring(ef_ote_hi) + ",\"ef_sweet\":" + str.tostring(ef_l0705) + ",\"ef_sl_ref\":" + str.tostring(ef_anchor_dir == 1 ? ef_anchor_low : ef_anchor_high) + ",\"ef_tp1\":" + str.tostring(ef_lm1) + ",\"ef_tp2\":" + str.tostring(ef_lm2) + ",\"market_price\":" + str.tostring(close) + ",\"regime\":\"" + _clean_regime + "\",\"sequence_status\":\"" + sequence_status + "\",\"setup_class\":\"" + _ef_grade + "\",\"setup_quality\":" + str.tostring(_ef_setup_q) + ",\"execution_quality\":" + str.tostring(_ef_exec_q) + ",\"liquidity\":{\"type\":\"" + liquidity_type + "\",\"price\":" + str.tostring(nz(liquidity_price, 0.0)) + "},\"structure\":{\"major_bos\":" + ((_ef_is_buy ? major_bull_close : major_bear_close) ? "true" : "false") + ",\"internal_shift\":" + ((_ef_is_buy ? mss_bullish : mss_bearish) ? "true" : "false") + ",\"choch\":" + (regime == 2 ? "true" : "false") + ",\"session_tag\":\"" + session_tag + "\"},\"poi\":{\"type\":\"" + (_ef_is_buy ? (bull_fvg_support ? "BULL_OB_FVG" : "BULL_OB") : (bear_fvg_support ? "BEAR_OB_FVG" : "BEAR_OB")) + "\",\"high\":" + str.tostring(nz(_ef_is_buy ? bull_poi_high : bear_poi_high, 0.0)) + ",\"low\":" + str.tostring(nz(_ef_is_buy ? bull_poi_low : bear_poi_low, 0.0)) + ",\"freshness_bars\":" + str.tostring(nz(_ef_is_buy ? last_bear_age : last_bull_age, 999)) + ",\"has_adjacent_fvg\":" + ((_ef_is_buy ? bull_fvg_support : bear_fvg_support) ? "true" : "false") + "},\"timestamp\":\"" + str.tostring(time) + "\"}", alert.freq_once_per_bar_close)
 
 // End of SMC SuperFib v10.9
