@@ -657,10 +657,10 @@ ef_l062   = ef_lvl(0.620)
 ef_l0705  = ef_lvl(0.705)
 ef_l079   = ef_lvl(0.790)
 ef_l100   = ef_lvl(1.000)
-ef_lm1    = ef_is_bull ? ef_lvl(-1.000) : ef_lvl(2.000)
-ef_lm2    = ef_is_bull ? ef_lvl(-2.000) : ef_lvl(3.000)
-ef_lm25   = ef_is_bull ? ef_lvl(-2.500) : ef_lvl(3.500)
-ef_lm4    = ef_is_bull ? ef_lvl(-4.000) : ef_lvl(5.000)
+ef_lm1    = ef_lvl(2.000)
+ef_lm2    = ef_lvl(3.000)
+ef_lm25   = ef_lvl(3.500)
+ef_lm4    = ef_lvl(5.000)
 
 // Compatibility aliases for legacy scoring paths
 ef_l0625 = ef_l062
@@ -745,8 +745,6 @@ ict_l100  = ict_ote_lvl(1.000)
 ict_lm027 = ict_ote_lvl(-0.270)
 ict_lm062 = ict_ote_lvl(-0.620)
 
-ict_in_ote_sell = ef_near_entry_sell
-ict_in_ote_buy  = ef_near_entry_buy
 
 // ── HEATMAP MATH ───────────────────────────────────────────────────
 fib_pressure_component(fib_hi, fib_lo) =>
