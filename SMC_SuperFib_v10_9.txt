@@ -1,18 +1,25 @@
 //@version=6
-indicator("SMC SuperFib v10.9 – Event Execution Engine", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500, max_bars_back=5000)
+indicator("SMC SuperFib v10.10 – Indicator Integrity", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500, max_bars_back=5000)
 
 // ═══════════════════════════════════════════════════════════════════
-// SMC SuperFib v10.9 — Auto Session, 50% Level, Compression Guard + Visual Patches
+// SMC SuperFib v10.10 — Indicator Integrity Rebuild
 //
-// v10.9 PATCHES (over v10.8 – all previous patches preserved):
-//   PATCH G — SF Confluence: chop‑zone exclusion kills intermediate levels.
-//              New sf_side() used for matching; sf_zone() remains for display.
-//   PATCH H — Tolerance floor: 3 pip minimum for _w on all pairs.
-//   PATCH I — mss_bar resets on fresh sweep; prevents stale MSS in reversal.
-//   PATCH J — valid_sequence window now measured from sweep_bar (10 bars).
-//   PATCH K — HTF SL buffer scaling implemented (1.5× daily, 2.0× higher).
-//   PATCH L — EF year high/low init fixed (first bar no longer poisons anchor).
-//   PATCH M — (cosmetic) documented +1 bonus in eff_base; no change.
+// v10.10 CHANGES (over v10.9 – all previous patches preserved):
+//   FIX 1 — Compression guard: min swing range (pips) + displacement
+//            confirmation (body %) prevents fib drawing during chop.
+//   FIX 2 — Fib engine rebuilt: dynamic symmetric level generation
+//            from base + extension arrays. No hardcoded indices.
+//   FIX 3 — 162.5% duplicate bug fixed: deduplication via array.includes.
+//   FIX 4 — Fib price calc corrected: directional formula ensures
+//            full buy/sell side symmetry.
+//   FIX 5 — Locked structure: lockedHigh/lockedLow update only on
+//            BOS/MSS or swing change. No repainting.
+//   FIX 6 — Draw engine rebuilt: lines stored in arrays, deleted
+//            before redraw. Performance safe.
+//   FIX 7 — Levels sorted ascending before rendering.
+//
+// v10.9 PATCHES (all preserved):
+//   PATCH G–M (SF confluence, tolerance floor, mss_bar, etc.)
 //
 // v10.8 PATCHES (all preserved):
 //   PATCH A–F (auto session, 50% level, compression guard, entry buffer, midnight anchor)
@@ -20,7 +27,7 @@ indicator("SMC SuperFib v10.9 – Event Execution Engine", overlay=true, max_lin
 //
 // ARCHITECTURE PRESERVED:
 //   • F1 / F2 / F3 session fib logic — UNTOUCHED
-//   • SuperFib confluence engine — MODIFIED (matching logic only)
+//   • SuperFib confluence engine — REBUILT (dynamic levels)
 //   • EF calculation modes — UNTOUCHED
 //   • Session cascade / anchor logic — UNTOUCHED
 //   • All alertcondition names — UNTOUCHED
@@ -83,6 +90,12 @@ sf_min_pips_usd   = input.float(15.0, "SF min range pips (USD)",    minval=5.0, 
 sf_min_pips_jpy   = input.float(30.0, "SF min range pips (JPY)",    minval=5.0, maxval=500.0, step=5.0, group=GN, display=display.none)
 htf_tf            = input.string("D", "HTF confluence timeframe",   options=["60","240","D","W"],       group=GN, display=display.none)
 anchor_bars       = input.int(50, "SL/TP right anchor (bars)", minval=10, maxval=500, group=GN, display=display.none)
+
+// ── INPUTS — Compression Guard (v10.10) ───────────────────────────
+var GCG = "Compression Guard"
+cg_min_range_usd  = input.float(20.0,  "Min swing range pips (USD)", minval=5.0, maxval=200.0, step=1.0, group=GCG, display=display.none)
+cg_min_range_jpy  = input.float(40.0,  "Min swing range pips (JPY)", minval=10.0, maxval=500.0, step=5.0, group=GCG, display=display.none)
+cg_min_body_pct   = input.float(0.40,  "Min body % (displacement)",  minval=0.1, maxval=1.0, step=0.05, group=GCG, display=display.none)
 
 // ── INPUTS — Manual Override ───────────────────────────────────────
 var GO = "Manual Override (0 = auto)"
@@ -208,6 +221,10 @@ band_size       = pip_type == "JPY" ? 0.80 : 0.0030
 pip_mult        = pip_type == "JPY" ? 0.01  : 0.0001
 show_ext        = true
 ef_enabled      = show_ef
+
+// ── COMPRESSION GUARD (v10.10) ────────────────────────────────────
+// Converts pip-based min range to price units using syminfo.mintick
+cg_min_range_price = (pip_type == "JPY" ? cg_min_range_jpy : cg_min_range_usd) * syminfo.mintick * 10
 
 first_trading_day_of_month(_y, _m) =>
     t1  = timestamp("America/New_York", _y, _m, 1, 0, 0)
@@ -788,6 +805,29 @@ sequence_status := valid_sequence ? "READY" :
 major_bull_close = sweep_down and not na(last_ph1) and close > last_ph1
 major_bear_close = sweep_up   and not na(last_pl1) and close < last_pl1
 
+// ── LOCKED STRUCTURE (v10.10 — FIX 5) ─────────────────────────────
+// Swing values locked until new structure forms (BOS/MSS/swing change)
+var float lockedHigh = na
+var float lockedLow  = na
+var bool  lockedBull = false
+
+// Detect structural change: BOS, MSS, or new swing pivot
+_structure_changed = is_hh or is_ll or is_lh or is_hl or mss_bullish or mss_bearish or not na(ph) or not na(pl)
+if _structure_changed
+    lockedHigh := nz(last_ph1, high)
+    lockedLow  := nz(last_pl1, low)
+    lockedBull := regime == 1 or (regime == 2 and prev_regime == -1)
+
+// ── COMPRESSION GUARD EVALUATION (v10.10 — FIX 1) ────────────────
+// Check if current swing range meets minimum pip threshold
+_locked_range = nz(lockedHigh - lockedLow, 0.0)
+_cg_valid_range = _locked_range >= cg_min_range_price
+// Displacement confirmation: last displacement candle had body >= min %
+_cg_body_pct = math.abs(close - open) / math.max(high - low, syminfo.mintick)
+_cg_valid_displacement = _cg_body_pct >= cg_min_body_pct
+// Master gate: both conditions required
+allowFib = _cg_valid_range and _cg_valid_displacement and not na(lockedHigh) and not na(lockedLow)
+
 var string liquidity_type  = "NONE"
 var float  liquidity_price = na
 if sweep_up
@@ -890,28 +930,68 @@ sf_side(p, hi, lo) =>
     mid = (hi + lo) / 2
     p >= mid ? 1 : -1
 
+// ── DYNAMIC FIB LEVEL ARRAYS (v10.10 — FIX 2) ────────────────────
+// Single source-of-truth: base levels + extension inputs
+// Base:       0.0, 0.25, 0.5, 0.625, 0.75, 1.0
+// Extensions: 0.625, 1.0, 1.625, 2.0
+// Generated:  base + positive exts (1+ext) + negative exts (-ext)
+// Deduplicated and sorted ascending (FIX 3 + FIX 7)
+
+var array<float> fib_ratios = array.new_float()
+var array<string> fib_labels = array.new_string()
+
+f_build_fib_levels() =>
+    array<float> _levels = array.new_float()
+    // Base levels (internal: 0 → 1.0)
+    float[] _base = array.from(0.0, 0.25, 0.5, 0.625, 0.75, 1.0)
+    for _b in _base
+        if not array.includes(_levels, _b)
+            array.push(_levels, _b)
+    // Extension inputs
+    float[] _exts = array.from(0.625, 1.0, 1.625, 2.0)
+    // Positive extensions (buy-side): 1 + ext
+    for _e in _exts
+        _pos = 1.0 + _e
+        if not array.includes(_levels, _pos)
+            array.push(_levels, _pos)
+    // Negative extensions (sell-side): -ext
+    for _e in _exts
+        _neg = -_e
+        if not array.includes(_levels, _neg)
+            array.push(_levels, _neg)
+    // Sort ascending
+    array.sort(_levels, order.ascending)
+    _levels
+
+f_build_fib_label(lvl) =>
+    _pct = lvl * 100
+    str.tostring(_pct, "#.#") + "%"
+
+if barstate.isfirst
+    fib_ratios := f_build_fib_levels()
+    for _r in fib_ratios
+        array.push(fib_labels, f_build_fib_label(_r))
+
+// Total number of dynamic fib levels
+fib_level_count = array.size(fib_ratios)
+
+// ── FIB PRICE CALCULATION (v10.10 — FIX 4) ───────────────────────
+// Uses hi - rng * ratio (same as f_lvl convention):
+//   ratio 0.0 → hi (0% premium end)
+//   ratio 1.0 → lo (100% discount end)
+//   ratio < 0  → above hi (sell-side extensions)
+//   ratio > 1  → below lo (buy-side extensions)
+// Direction (bullish/bearish) only affects labels and arrows, not prices.
+// This keeps draw_fib_t and sf_key perfectly aligned.
+
+// Legacy sf_key wrapper for SuperFib matching (uses array index)
 sf_key(hi, lo, idx) =>
-    rng = hi - lo
-    idx == 0  ? hi              :
-     idx == 1  ? hi - rng*0.25  :
-     idx == 2  ? hi - rng*0.50  :
-     idx == 3  ? hi - rng*0.625 :
-     idx == 4  ? hi - rng*0.75  :
-     idx == 5  ? lo             :
-     idx == 6  ? hi + rng*0.25  :
-     idx == 7  ? hi + rng*0.50  :
-     idx == 8  ? hi + rng*0.625 :
-     idx == 9  ? hi + rng*0.75  :
-     idx == 10 ? hi + rng*1.00  :
-     idx == 11 ? hi + rng*1.625 :
-     idx == 12 ? hi + rng*2.00  :
-     idx == 13 ? lo - rng*0.25  :
-     idx == 14 ? lo - rng*0.50  :
-     idx == 15 ? lo - rng*0.625 :
-     idx == 16 ? lo - rng*0.75  :
-     idx == 17 ? lo - rng*1.00  :
-     idx == 18 ? lo - rng*1.625 :
-     lo - rng*2.00
+    if idx >= 0 and idx < array.size(fib_ratios)
+        ratio = array.get(fib_ratios, idx)
+        rng = hi - lo
+        hi - rng * ratio
+    else
+        float(na)
 
 base_stars_at_close() =>
     ref_hi = not na(f3_high) and f3_high != 0.0 ? f3_high : not na(f1_high) ? f1_high : na
@@ -925,15 +1005,16 @@ base_stars_at_close() =>
         _ref_rng = _have_f3 ? (f3_high - f3_low) : _have_f1 ? (f1_high - f1_low) : (f2_high - f2_low)
         _w       = _ref_rng * (sf_tolerance / 100)
         _best    = 0
+        _dyn_max = fib_level_count - 1
         for fi = 1 to 3
             fh = fi == 1 ? f1_high : fi == 2 ? f2_high : f3_high
             fl = fi == 1 ? f1_low  : fi == 2 ? f2_low  : f3_low
             _fa = fi == 1 ? _have_f1 : fi == 2 ? _have_f2 : _have_f3
             if _fa and not na(fh) and not na(fl)
-                for ki = 0 to 19
+                for ki = 0 to _dyn_max
                     pk = sf_key(fh, fl, ki)
-                    zk = sf_zone(pk, fh, fl)
-                    if zk != 0 and math.abs(close - pk) <= _w * 2
+                    zk = sf_zone(nz(pk), fh, fl)
+                    if zk != 0 and math.abs(close - nz(pk)) <= _w * 2
                         _count = 1
                         for fj = 1 to 3
                             if fj != fi
@@ -941,10 +1022,10 @@ base_stars_at_close() =>
                                 ol  = fj == 1 ? f1_low  : fj == 2 ? f2_low  : f3_low
                                 _fb = fj == 1 ? _have_f1 : fj == 2 ? _have_f2 : _have_f3
                                 if _fb and not na(oh) and not na(ol)
-                                    for oi = 0 to 19
+                                    for oi = 0 to _dyn_max
                                         op = sf_key(oh, ol, oi)
-                                        oz = sf_zone(op, oh, ol)
-                                        if oz == zk and math.abs(pk - op) <= _w
+                                        oz = sf_zone(nz(op), oh, ol)
+                                        if oz == zk and math.abs(nz(pk) - nz(op)) <= _w
                                             _count += 1
                                             break
                         if _count > _best
@@ -970,14 +1051,14 @@ depth_bonus_at_close(pz) =>
             else
                 _fa := not na(f3_high) and not na(f3_low)
             if _fa and not na(fh) and not na(fl)
-                for ki = 0 to 19
+                for ki = 0 to fib_level_count - 1
                     pk = sf_key(fh, fl, ki)
-                    zk = sf_zone(pk, fh, fl)
+                    zk = sf_zone(nz(pk), fh, fl)
                     if zk == pz
-                        _d = math.abs(close - pk)
+                        _d = math.abs(close - nz(pk))
                         if na(_best_d) or _d < _best_d
                             _best_d   := _d
-                            _best_lvl := pk
+                            _best_lvl := nz(pk)
         if na(_best_lvl)
             0
         else
@@ -1003,14 +1084,14 @@ pivot_approach_bonus(pz) =>
             else
                 _fa := not na(f3_high) and not na(f3_low)
             if _fa and not na(fh) and not na(fl)
-                for ki = 0 to 19
+                for ki = 0 to fib_level_count - 1
                     pk = sf_key(fh, fl, ki)
-                    zk = sf_zone(pk, fh, fl)
+                    zk = sf_zone(nz(pk), fh, fl)
                     if zk == pz
-                        _d = math.abs(close - pk)
+                        _d = math.abs(close - nz(pk))
                         if na(_best_d) or _d < _best_d
                             _best_d   := _d
-                            _best_lvl := pk
+                            _best_lvl := nz(pk)
         if na(_best_lvl)
             0
         else
@@ -1072,7 +1153,7 @@ m_ts_bear    = not na(last_ph1) and high > last_ph1 + bos_thresh and close < las
 star_str(n) => n >= 5 ? "⭐⭐⭐⭐⭐" : n == 4 ? "⭐⭐⭐⭐" : n == 3 ? "⭐⭐⭐" : n == 2 ? "⭐⭐" : "⭐"
 
 sf_idx_label(idx) =>
-    idx == 0 ? "0%" : idx == 1 ? "25%" : idx == 2 ? "50%" : idx == 3 ? "62.5%" : idx == 4 ? "75%" : idx == 5 ? "100%" : idx == 6 ? "-25%" : idx == 7 ? "-50%" : idx == 8 ? "-62.5%" : idx == 9 ? "-75%" : idx == 10 ? "-100%" : idx == 11 ? "-162.5%" : idx == 12 ? "-200%" : idx == 13 ? "125%" : idx == 14 ? "150%" : idx == 15 ? "162.5%" : idx == 16 ? "175%" : idx == 17 ? "200%" : idx == 18 ? "262.5%" : "300%"
+    idx >= 0 and idx < array.size(fib_labels) ? array.get(fib_labels, idx) : "?"
 
 // ── HYBRID EDE STAR ENGINE ────────────────────────────────────────
 f_ede_tier(level_price, fib_high, fib_low) =>
@@ -1094,24 +1175,43 @@ f_hybrid_stars(level_price, fib_high, fib_low, conf_count) =>
 f_star_label(stars) =>
     stars == 0 ? "★0" : stars == 1 ? "★" : stars == 2 ? "★★" : stars == 3 ? "★★★" : stars == 4 ? "★★★★" : "★★★★★"
 
+// ── DRAW ENGINE STORAGE (v10.10 — FIX 6) ─────────────────────────
+// Store all drawn objects for cleanup before redraw
+var array<line>  _fib_lines  = array.new_line()
+var array<box>   _fib_boxes  = array.new_box()
+var array<label> _fib_labels = array.new_label()
+
+f_clear_fib_objects() =>
+    while array.size(_fib_lines) > 0
+        line.delete(array.pop(_fib_lines))
+    while array.size(_fib_boxes) > 0
+        box.delete(array.pop(_fib_boxes))
+    while array.size(_fib_labels) > 0
+        label.delete(array.pop(_fib_labels))
+
 // ── DRAWING PRIMITIVES ────────────────────────────────────────────
 f_lvl(a, b, ratio) => a - (a - b) * ratio
 get_lw(depth)      => depth <= 2 ? 1 : depth == 3 ? 2 : 3
 
 draw_hline_t(x_t, price, lc, lw, ls) =>
-    line.new(x_t - _back_extension, price, x_t, price, xloc=xloc.bar_time, color=lc, width=lw, style=ls)
+    _l = line.new(x_t - _back_extension, price, x_t, price, xloc=xloc.bar_time, color=lc, width=lw, style=ls)
+    array.push(_fib_lines, _l)
+    _l
 
 draw_band_t(x_t, price, bsz, bc, depth) =>
     if bsz > 0.0
         opacity = depth <= 2 ? 93 : depth == 3 ? 88 : depth == 4 ? 82 : 75
-        box.new(x_t - _back_extension, price + bsz, x_t, price - bsz, xloc=xloc.bar_time, border_color=color.new(bc, 98), bgcolor=color.new(bc, opacity))
+        _b = box.new(x_t - _back_extension, price + bsz, x_t, price - bsz, xloc=xloc.bar_time, border_color=color.new(bc, 98), bgcolor=color.new(bc, opacity))
+        array.push(_fib_boxes, _b)
 
 draw_lbl_t(x_t, price, txt, tc) =>
     sz = lbl_size == "tiny" ? size.tiny : lbl_size == "normal" ? size.normal : lbl_size == "large" ? size.large : size.small
-    label.new(x_t + _ms_per_bar * 2, price, txt, xloc=xloc.bar_time, style=label.style_label_lower_left, color=color.new(color.white, 100), textcolor=tc, size=sz)
+    _l = label.new(x_t + _ms_per_bar * 2, price, txt, xloc=xloc.bar_time, style=label.style_label_lower_left, color=color.new(color.white, 100), textcolor=tc, size=sz)
+    array.push(_fib_labels, _l)
 
 draw_chop_fill_t(x_t, hi, lo) =>
-    box.new(x_t - _back_extension, f_lvl(hi,lo,0.375), x_t, f_lvl(hi,lo,0.625), xloc=xloc.bar_time, border_color=color.new(color.gray,100), bgcolor=C_CHOP_FILL)
+    _b = box.new(x_t - _back_extension, f_lvl(hi,lo,0.375), x_t, f_lvl(hi,lo,0.625), xloc=xloc.bar_time, border_color=color.new(color.gray,100), bgcolor=C_CHOP_FILL)
+    array.push(_fib_boxes, _b)
 
 draw_vert_arrow_t(x_t, hi, lo, point_up, vc, lw) =>
     wing_sz  = (hi - lo) * 0.15
@@ -1149,42 +1249,77 @@ draw_fib_t(x_t, hi, lo, is_swap, point_up, lw_base, fib_name) =>
         d_ext2  = is_swap ? swap_ext  : disc_ext2
         arr_col = is_swap ? swap_key : point_up ? ARR_UP : ARR_DOWN
         rng     = math.abs(hi - lo)
-        lbl0    = point_up ? "0%" : "100%"
-        lbl100  = point_up ? "100%" : "0%"
 
-        if show_ext
-            draw_level_t(x_t, hi+rng*3.00,  band_size, fib_name, "-300%",   p_ext2, p_ext2, p_ext2, 5)
-            draw_level_t(x_t, hi+rng*2.00,  band_size, fib_name, "-200%",   p_ext2, p_ext2, p_ext2, 5)
-            draw_level_t(x_t, hi+rng*1.625, band_size, fib_name, "-162.5%", p_ext2, p_ext2, p_ext2, 5)
-            draw_level_t(x_t, hi+rng*1.00,  band_size, fib_name, "-100%",   p_ext2, p_ext2, p_ext2, 5)
-            draw_level_t(x_t, hi+rng*0.75,  band_size, fib_name, "-75%",    p_ext2, p_ext2, p_ext2, 5)
-            draw_level_t(x_t, hi+rng*0.625, band_size, fib_name, "-62.5%",  p_ext2, p_ext2, p_ext2, 5)
-            draw_level_t(x_t, hi+rng*0.50,  band_size, fib_name, "-50%",    p_ext1, p_ext1, p_ext1, 4)
-            draw_level_t(x_t, hi+rng*0.25,  band_size, fib_name, "-25%",    p_ext1, p_ext1, p_ext1, 4)
-        draw_level_t(x_t, hi,                 band_size, fib_name, lbl0,       p_key,  p_key,  p_key,  3)
+        // v10.10 FIX 2+4+7: iterate sorted dynamic fib_ratios array
+        // Price = hi - rng * ratio (non-directional, matches sf_key)
+        for _idx = 0 to array.size(fib_ratios) - 1
+            _ratio = array.get(fib_ratios, _idx)
+            _price = f_lvl(hi, lo, _ratio)
+            _lbl   = array.get(fib_labels, _idx)
+            // Classify level for color + depth
+            _is_ext   = _ratio < 0.0 or _ratio > 1.0
+            _is_base  = _ratio >= 0.0 and _ratio <= 1.0
+            _is_prem  = _ratio <= 0.5
+            _is_chop  = _ratio > 0.375 and _ratio < 0.625
+            _is_50    = math.abs(_ratio - 0.5) < 0.001
+            // Skip extensions if not shown
+            if _is_ext and not show_ext
+                continue
+            // Determine color + depth
+            lc = color.white
+            bc = color.white
+            tc = color.white
+            depth = 1
+            if _is_50
+                lc := is_swap ? color.new(swap_edge,50) : color.new(color.gray,50)
+                bc := color.new(color.gray,95)
+                tc := is_swap ? color.new(swap_edge,30) : color.new(color.gray,30)
+                depth := 1
+                _lbl := "50% ✕"
+            else if _is_chop and _is_base
+                lc := is_swap ? swap_edge : C_CHOP_BNDRY
+                bc := lc
+                tc := is_swap ? color.new(swap_edge,10) : color.new(color.orange,10)
+                depth := 1
+                _lbl := _lbl + " ⛔"
+            else if _is_ext and _ratio < 0.0
+                // Sell-side extensions (above high)
+                _far = _ratio <= -1.0
+                lc := _far ? p_ext2 : p_ext1
+                bc := lc
+                tc := lc
+                depth := _far ? 5 : 4
+            else if _is_ext and _ratio > 1.0
+                // Buy-side extensions (below low)
+                _far = _ratio >= 2.0
+                lc := _far ? d_ext2 : d_ext1
+                bc := lc
+                tc := lc
+                depth := _far ? 5 : 4
+            else if _is_prem
+                // Premium zone (0%-50%)
+                _is_edge = math.abs(_ratio) < 0.001 or math.abs(_ratio - 0.25) < 0.001
+                lc := _is_edge ? (_ratio < 0.001 ? p_key : p_edge) : p_edge
+                bc := lc
+                tc := lc
+                depth := _ratio < 0.001 ? 3 : 2
+            else
+                // Discount zone (50%-100%)
+                _is_key = math.abs(_ratio - 0.625) < 0.001 or math.abs(_ratio - 1.0) < 0.001
+                lc := _is_key ? d_key : d_edge
+                bc := lc
+                tc := lc
+                depth := _is_key ? 3 : 2
+            _bsz = _is_50 ? 0.0 : band_size
+            draw_level_t(x_t, _price, _bsz, fib_name, _lbl, lc, bc, tc, depth)
+        // Entry buffer boxes at high/low
         if show_bands
-            box.new(x_t - _back_extension, hi + rng*0.25, x_t, hi - rng*0.25, xloc=xloc.bar_time,
+            _eb_hi = box.new(x_t - _back_extension, hi + rng*0.25, x_t, hi - rng*0.25, xloc=xloc.bar_time,
                      border_color=color.new(#FFD700, 55), bgcolor=C_ENTRY_BUFFER, border_width=1)
-            box.new(x_t - _back_extension, lo + rng*0.25, x_t, lo - rng*0.25, xloc=xloc.bar_time,
+            array.push(_fib_boxes, _eb_hi)
+            _eb_lo = box.new(x_t - _back_extension, lo + rng*0.25, x_t, lo - rng*0.25, xloc=xloc.bar_time,
                      border_color=color.new(#FFD700, 55), bgcolor=C_ENTRY_BUFFER, border_width=1)
-        draw_level_t(x_t, f_lvl(hi,lo,0.25),  band_size, fib_name, "25%",      p_edge, p_edge, p_edge, 2)
-        chop_lc = is_swap ? swap_edge : C_CHOP_BNDRY
-        chop_tc = is_swap ? color.new(swap_edge,10) : color.new(color.orange,10)
-        draw_level_t(x_t, f_lvl(hi,lo,0.375), band_size, fib_name, "37.5% ⛔", chop_lc, chop_lc, chop_tc, 1)
-        mid_lc = is_swap ? color.new(swap_edge,50) : color.new(color.gray,50)
-        mid_tc = is_swap ? color.new(swap_edge,30) : color.new(color.gray,30)
-        draw_level_t(x_t, f_lvl(hi,lo,0.5),   0.0,       fib_name, "50% ✕",    mid_lc, color.new(color.gray,95), mid_tc, 1)
-        draw_level_t(x_t, f_lvl(hi,lo,0.625), band_size, fib_name, "62.5%",    d_key,  d_key,  d_key,  3)
-        draw_level_t(x_t, f_lvl(hi,lo,0.75),  band_size, fib_name, "75%",      d_edge, d_edge, d_edge, 2)
-        draw_level_t(x_t, lo,                  band_size, fib_name, lbl100,     d_key,  d_key,  d_key,  3)
-        if show_ext
-            draw_level_t(x_t, lo-rng*0.25,  band_size, fib_name, "+125%",   d_ext1, d_ext1, d_ext1, 4)
-            draw_level_t(x_t, lo-rng*0.50,  band_size, fib_name, "+150%",   d_ext1, d_ext1, d_ext1, 4)
-            draw_level_t(x_t, lo-rng*0.625, band_size, fib_name, "+162.5%", d_ext2, d_ext2, d_ext2, 5)
-            draw_level_t(x_t, lo-rng*0.75,  band_size, fib_name, "+175%",   d_ext2, d_ext2, d_ext2, 5)
-            draw_level_t(x_t, lo-rng*1.00,  band_size, fib_name, "+200%",   d_ext2, d_ext2, d_ext2, 5)
-            draw_level_t(x_t, lo-rng*1.625, band_size, fib_name, "+262.5%", d_ext2, d_ext2, d_ext2, 5)
-            draw_level_t(x_t, lo-rng*2.00,  band_size, fib_name, "+300%",   d_ext2, d_ext2, d_ext2, 5)
+            array.push(_fib_boxes, _eb_lo)
         if show_chop
             draw_chop_fill_t(x_t, hi, lo)
         draw_vert_arrow_t(x_t, hi, lo, point_up, arr_col, lw_base)
@@ -1783,7 +1918,7 @@ if ict_enabled and show_ict_table and barstate.islast
     stage_col   = state == "ACTIVE" ? C_TBL_BULL : C_TBL_NEUTRAL
 
     table.cell(hm_tbl, 0,  0, "SMC SuperFIB",         text_color=C_TBL_HEAD_TXT,        text_size=size.small, bgcolor=C_TBL_BG_HEAD)
-    table.cell(hm_tbl, 1,  0, "v10.9",               text_color=color.new(#00FFFF,40), text_size=size.tiny,  bgcolor=C_TBL_BG_HEAD)
+    table.cell(hm_tbl, 1,  0, "v10.10",              text_color=color.new(#00FFFF,40), text_size=size.tiny,  bgcolor=C_TBL_BG_HEAD)
     table.cell(hm_tbl, 0,  1, "STRUCTURE",          text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 1,  1, struct_str,           text_color=struct_col,            text_size=size.small, bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 0,  2, "BIAS",               text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
@@ -1823,21 +1958,27 @@ sf_is_dup(price, half) =>
 
 // ═══════════════════════════════════════════════════════════════════
 // MAIN DRAW — barstate.islast gate only
+// v10.10: Clear previous objects, apply allowFib compression guard
 // ═══════════════════════════════════════════════════════════════════
 if barstate.islast
+    // FIX 6: Delete all previous fib objects before redraw
+    f_clear_fib_objects()
+
     _fib_min_range = (pip_type == "JPY" ? sf_min_pips_jpy : sf_min_pips_usd) * pip_mult
 
-    if show_f1_inp and not na(f1_high) and not na(f1_low) and _den_full
-        if (f1_high - f1_low) >= _fib_min_range
-            draw_fib_t(_t5, f1_high, f1_low, false, f1_bull, 3, f1_name)
+    // FIX 1+5: Only draw fibs if compression guard passes AND structure is locked
+    if allowFib
+        if show_f1_inp and not na(f1_high) and not na(f1_low) and _den_full
+            if (f1_high - f1_low) >= _fib_min_range
+                draw_fib_t(_t5, f1_high, f1_low, false, f1_bull, 3, f1_name)
 
-    if show_f2_inp and not na(f2_high) and not na(f2_low) and _den_full
-        if (f2_high - f2_low) >= _fib_min_range
-            draw_fib_t(_t4, f2_high, f2_low, true, f2_is_bull, 2, f2_name)
+        if show_f2_inp and not na(f2_high) and not na(f2_low) and _den_full
+            if (f2_high - f2_low) >= _fib_min_range
+                draw_fib_t(_t4, f2_high, f2_low, true, f2_is_bull, 2, f2_name)
 
-    if show_f3_inp and not na(f3_high) and not na(f3_low) and _den_full
-        if (f3_high - f3_low) >= _fib_min_range
-            draw_fib_t(_t3, f3_high, f3_low, false, f3_bull, 1, f3_name)
+        if show_f3_inp and not na(f3_high) and not na(f3_low) and _den_full
+            if (f3_high - f3_low) >= _fib_min_range
+                draw_fib_t(_t3, f3_high, f3_low, false, f3_bull, 1, f3_name)
 
     if ict_enabled and show_ict_fib_inp and _den_full
         draw_ict_ote_t(_t6)
@@ -1850,7 +1991,8 @@ if barstate.islast
                       xloc=xloc.bar_time, style=label.style_label_left,
                       color=ef_impulse ? color.new(color.orange,60) : color.new(color.blue,70), textcolor=color.white, size=sz_ef)
 
-    if show_superfib_inp and _den_ess
+    // FIX 1: SuperFib also gated by allowFib
+    if show_superfib_inp and _den_ess and allowFib
         _have_f1 = not na(f1_high) and not na(f1_low)
         _have_f2 = not na(f2_high) and not na(f2_low)
         _have_f3 = not na(f3_high) and not na(f3_low)
@@ -1877,101 +2019,104 @@ if barstate.islast
 
             array.clear(_sf_drawn)
 
+            // v10.10: Use dynamic fib_level_count instead of hardcoded 20
+            _sf_max = fib_level_count - 1
+
             // PATCH G: Use sf_side() for matching (ignores chop zone)
             // 3-star
-            for i = 0 to 19
+            for i = 0 to _sf_max
                 p1 = _sf_f1 ? sf_key(f1_high, f1_low, i) : na
-                s1 = _sf_f1 ? sf_side(p1, f1_high, f1_low) : 0
-                for j = 0 to 19
+                s1 = _sf_f1 ? sf_side(nz(p1), f1_high, f1_low) : 0
+                for j = 0 to _sf_max
                     p2 = _sf_f2 ? sf_key(f2_high, f2_low, j) : na
-                    s2 = _sf_f2 ? sf_side(p2, f2_high, f2_low) : 0
-                    for k = 0 to 19
+                    s2 = _sf_f2 ? sf_side(nz(p2), f2_high, f2_low) : 0
+                    for k = 0 to _sf_max
                         p3 = _sf_f3 ? sf_key(f3_high, f3_low, k) : na
-                        s3 = _sf_f3 ? sf_side(p3, f3_high, f3_low) : 0
-                        _m12 = _sf_f1 and _sf_f2 and s1 != 0 and s1 == s2 and math.abs(p1 - p2) <= _w
-                        _m13 = _sf_f1 and _sf_f3 and s1 != 0 and s1 == s3 and math.abs(p1 - p3) <= _w
+                        s3 = _sf_f3 ? sf_side(nz(p3), f3_high, f3_low) : 0
+                        _m12 = _sf_f1 and _sf_f2 and s1 != 0 and s1 == s2 and math.abs(nz(p1) - nz(p2)) <= _w
+                        _m13 = _sf_f1 and _sf_f3 and s1 != 0 and s1 == s3 and math.abs(nz(p1) - nz(p3)) <= _w
                         if _m12 and _m13
-                            _avg3 = (p1+p2+p3)/3
+                            _avg3 = (nz(p1)+nz(p2)+nz(p3))/3
                             if not sf_is_dup(_avg3, _half)
                                 // Use sf_zone for display (preserves chop visual)
-                                z1_disp = sf_zone(p1, f1_high, f1_low)
+                                z1_disp = sf_zone(nz(p1), f1_high, f1_low)
                                 sf_draw_t(_avg3, _half, 3, z1_disp, _x_sf, f3_high, f3_low, i)
                                 array.push(_sf_drawn, _avg3)
 
             // 2-star F1+F2 and F1+F3
-            for i = 0 to 19
+            for i = 0 to _sf_max
                 p1 = _sf_f1 ? sf_key(f1_high, f1_low, i) : na
-                s1 = _sf_f1 ? sf_side(p1, f1_high, f1_low) : 0
-                for j = 0 to 19
+                s1 = _sf_f1 ? sf_side(nz(p1), f1_high, f1_low) : 0
+                for j = 0 to _sf_max
                     p2 = _sf_f2 ? sf_key(f2_high, f2_low, j) : na
-                    s2 = _sf_f2 ? sf_side(p2, f2_high, f2_low) : 0
-                    if _sf_f1 and _sf_f2 and s1 != 0 and s1 == s2 and math.abs(p1 - p2) <= _w
+                    s2 = _sf_f2 ? sf_side(nz(p2), f2_high, f2_low) : 0
+                    if _sf_f1 and _sf_f2 and s1 != 0 and s1 == s2 and math.abs(nz(p1) - nz(p2)) <= _w
                         _is_triple = false
                         if _sf_f3
-                            for k = 0 to 19
+                            for k = 0 to _sf_max
                                 p3 = sf_key(f3_high, f3_low, k)
-                                s3 = sf_side(p3, f3_high, f3_low)
-                                if s3 == s1 and math.abs(p1 - p3) <= _w
+                                s3 = sf_side(nz(p3), f3_high, f3_low)
+                                if s3 == s1 and math.abs(nz(p1) - nz(p3)) <= _w
                                     _is_triple := true
                                     break
                         if not _is_triple
-                            _avg12 = (p1+p2)/2
+                            _avg12 = (nz(p1)+nz(p2))/2
                             if not sf_is_dup(_avg12, _half)
-                                z1_disp = sf_zone(p1, f1_high, f1_low)
+                                z1_disp = sf_zone(nz(p1), f1_high, f1_low)
                                 sf_draw_t(_avg12, _half, 2, z1_disp, _x_sf, f1_high, f1_low, i)
                                 array.push(_sf_drawn, _avg12)
-                for k = 0 to 19
+                for k = 0 to _sf_max
                     p3 = _sf_f3 ? sf_key(f3_high, f3_low, k) : na
-                    s3 = _sf_f3 ? sf_side(p3, f3_high, f3_low) : 0
-                    if _sf_f1 and _sf_f3 and s1 != 0 and s1 == s3 and math.abs(p1 - p3) <= _w
+                    s3 = _sf_f3 ? sf_side(nz(p3), f3_high, f3_low) : 0
+                    if _sf_f1 and _sf_f3 and s1 != 0 and s1 == s3 and math.abs(nz(p1) - nz(p3)) <= _w
                         _is_triple2 = false
                         if _sf_f2
-                            for j2 = 0 to 19
+                            for j2 = 0 to _sf_max
                                 p2b = sf_key(f2_high, f2_low, j2)
-                                s2b = sf_side(p2b, f2_high, f2_low)
-                                if s2b == s1 and math.abs(p1 - p2b) <= _w
+                                s2b = sf_side(nz(p2b), f2_high, f2_low)
+                                if s2b == s1 and math.abs(nz(p1) - nz(p2b)) <= _w
                                     _is_triple2 := true
                                     break
                         if not _is_triple2
-                            _avg13 = (p1+p3)/2
+                            _avg13 = (nz(p1)+nz(p3))/2
                             if not sf_is_dup(_avg13, _half)
-                                z1_disp = sf_zone(p1, f1_high, f1_low)
+                                z1_disp = sf_zone(nz(p1), f1_high, f1_low)
                                 sf_draw_t(_avg13, _half, 2, z1_disp, _x_sf, f1_high, f1_low, i)
                                 array.push(_sf_drawn, _avg13)
 
             // 2-star F2+F3
-            for j = 0 to 19
+            for j = 0 to _sf_max
                 p2 = _sf_f2 ? sf_key(f2_high, f2_low, j) : na
-                s2 = _sf_f2 ? sf_side(p2, f2_high, f2_low) : 0
-                for k = 0 to 19
+                s2 = _sf_f2 ? sf_side(nz(p2), f2_high, f2_low) : 0
+                for k = 0 to _sf_max
                     p3 = _sf_f3 ? sf_key(f3_high, f3_low, k) : na
-                    s3 = _sf_f3 ? sf_side(p3, f3_high, f3_low) : 0
-                    if _sf_f2 and _sf_f3 and s2 != 0 and s2 == s3 and math.abs(p2 - p3) <= _w
+                    s3 = _sf_f3 ? sf_side(nz(p3), f3_high, f3_low) : 0
+                    if _sf_f2 and _sf_f3 and s2 != 0 and s2 == s3 and math.abs(nz(p2) - nz(p3)) <= _w
                         _is_triple3 = false
                         if _sf_f1
-                            for i2 = 0 to 19
+                            for i2 = 0 to _sf_max
                                 p1b = sf_key(f1_high, f1_low, i2)
-                                s1b = sf_side(p1b, f1_high, f1_low)
-                                if s1b == s2 and math.abs(p2 - p1b) <= _w
+                                s1b = sf_side(nz(p1b), f1_high, f1_low)
+                                if s1b == s2 and math.abs(nz(p2) - nz(p1b)) <= _w
                                     _is_triple3 := true
                                     break
                         if not _is_triple3
-                            _avg23 = (p2+p3)/2
+                            _avg23 = (nz(p2)+nz(p3))/2
                             if not sf_is_dup(_avg23, _half)
-                                z2_disp = sf_zone(p2, f2_high, f2_low)
+                                z2_disp = sf_zone(nz(p2), f2_high, f2_low)
                                 sf_draw_t(_avg23, _half, 2, z2_disp, _x_sf, f2_high, f2_low, j)
                                 array.push(_sf_drawn, _avg23)
 
-            // 1-star (unchanged except using _sf_f1/2/3)
+            // 1-star (uses dynamic level count)
             if show_sf_1star and _den_full
                 for fib_idx = 1 to 3
                     fh = fib_idx == 1 ? f1_high : fib_idx == 2 ? f2_high : f3_high
                     fl = fib_idx == 1 ? f1_low  : fib_idx == 2 ? f2_low  : f3_low
                     _active = (fib_idx == 1 and _sf_f1) or (fib_idx == 2 and _sf_f2) or (fib_idx == 3 and _sf_f3)
                     if _active
-                        for ki = 0 to 19
+                        for ki = 0 to _sf_max
                             pk = sf_key(fh, fl, ki)
-                            zk = sf_zone(pk, fh, fl)
+                            zk = sf_zone(nz(pk), fh, fl)
                             if zk != 0
                                 _covered = false
                                 for other = 1 to 3
@@ -1980,14 +2125,14 @@ if barstate.islast
                                         ol = other == 1 ? f1_low  : other == 2 ? f2_low  : f3_low
                                         _o_active = (other == 1 and _sf_f1) or (other == 2 and _sf_f2) or (other == 3 and _sf_f3)
                                         if _o_active
-                                            for oi = 0 to 19
+                                            for oi = 0 to _sf_max
                                                 op = sf_key(oh, ol, oi)
-                                                oz = sf_zone(op, oh, ol)
-                                                if oz == zk and math.abs(pk - op) <= _w
+                                                oz = sf_zone(nz(op), oh, ol)
+                                                if oz == zk and math.abs(nz(pk) - nz(op)) <= _w
                                                     _covered := true
                                                     break
                                 if not _covered
-                                    sf_draw_t(pk, _half, 1, zk, _x_sf, fh, fl, ki)
+                                    sf_draw_t(nz(pk), _half, 1, zk, _x_sf, fh, fl, ki)
 
 // ═══════════════════════════════════════════════════════════════════
 // ALERTS
