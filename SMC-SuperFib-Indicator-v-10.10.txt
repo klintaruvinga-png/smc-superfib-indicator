@@ -589,106 +589,47 @@ else
     ef_curr_year_high := math.max(nz(ef_curr_year_high), high)
     ef_curr_year_low  := math.min(nz(ef_curr_year_low),  low)
 
-ef_atr_now = ta.atr(14)
-ef_leg_min = ef_min_range_pips * pip_mult
-
-// Candidate execution legs must be impulse + MSS + sweep context
-bull_leg_low  = nz(last_swing_low, low)
-bull_leg_high = high
-bear_leg_high = nz(last_swing_high, high)
-bear_leg_low  = low
-
-bull_leg_range = math.abs(bull_leg_high - bull_leg_low)
-bear_leg_range = math.abs(bear_leg_high - bear_leg_low)
-
-bull_leg_valid = sweep_down and mss_bullish and bull_leg_range >= ef_leg_min and (close - bull_leg_low) >= ef_atr_now * ef_disp_mult
-bear_leg_valid = sweep_up and mss_bearish and bear_leg_range >= ef_leg_min and (bear_leg_high - close) >= ef_atr_now * ef_disp_mult
-
 var float ef_anchor_low  = na
 var float ef_anchor_high = na
 var int   ef_anchor_dir  = 0   // 1 bull, -1 bear
 var int   ef_anchor_bar  = na
 
-if bull_leg_valid
-    ef_anchor_low  := bull_leg_low
-    ef_anchor_high := bull_leg_high
-    ef_anchor_dir  := 1
-    ef_anchor_bar  := bar_index
-else if bear_leg_valid
-    ef_anchor_low  := bear_leg_low
-    ef_anchor_high := bear_leg_high
-    ef_anchor_dir  := -1
-    ef_anchor_bar  := bar_index
-
-if ef_fallback_year and (na(ef_anchor_low) or na(ef_anchor_high) or (bar_index - nz(ef_anchor_bar, bar_index)) > ef_fresh_bars)
-    if not na(ef_curr_year_high) and not na(ef_curr_year_low)
-        ef_anchor_low  := ef_curr_year_low
-        ef_anchor_high := ef_curr_year_high
-        ef_anchor_dir  := close >= (ef_curr_year_high + ef_curr_year_low) * 0.5 ? 1 : -1
-        ef_anchor_bar  := bar_index
-
 var float ef_0   = na
 var float ef_100 = na
-if not na(ef_anchor_low) and not na(ef_anchor_high) and ef_anchor_high > ef_anchor_low
-    if ef_anchor_dir == 1
-        ef_0   := ef_anchor_low
-        ef_100 := ef_anchor_high
-    else
-        ef_0   := ef_anchor_high
-        ef_100 := ef_anchor_low
-else
-    ef_0   := na
-    ef_100 := na
+float ef_range         = na
+bool  ef_ascending     = false
+bool  ef_is_bull       = false
+string ef_mode_str     = "NONE"
 
-ef_range     = math.abs(ef_100 - ef_0)
-ef_ascending = ef_100 > ef_0
-ef_is_bull   = ef_anchor_dir == 1
-ef_mode_str  = ef_is_bull ? "BULL_EXEC" : ef_anchor_dir == -1 ? "BEAR_EXEC" : "NONE"
-
-ef_lvl(ratio) =>
-    if ef_ascending
-        ef_0 + ef_range * ratio
-    else
-        ef_0 - ef_range * ratio
-
-ef_l000   = ef_lvl(0.000)
-ef_l050   = ef_lvl(0.500)
-ef_l062   = ef_lvl(0.620)
-ef_l0705  = ef_lvl(0.705)
-ef_l079   = ef_lvl(0.790)
-ef_l100   = ef_lvl(1.000)
-ef_lm1    = ef_lvl(2.000)
-ef_lm2    = ef_lvl(3.000)
-ef_lm25   = ef_lvl(3.500)
-ef_lm4    = ef_lvl(5.000)
-
-// Compatibility aliases for legacy scoring paths
-ef_l0625 = ef_l062
-ef_l075  = ef_l0705
-ef_l0375 = ef_lvl(0.375)
-ef_l025  = ef_lvl(0.250)
-
-ef_ote_lo = math.min(ef_l062, ef_l079)
-ef_ote_hi = math.max(ef_l062, ef_l079)
-
-prox_pips   = pip_type == "JPY" ? ef_prox_pips_jpy : ef_prox_pips_usd
-prox_thresh = prox_pips * pip_mult
-
-ef_dist_ote_lo = math.abs(close - ef_ote_lo)
-ef_dist_ote_hi = math.abs(close - ef_ote_hi)
-ef_dist_sweet  = math.abs(close - ef_l0705)
-
-ef_in_ote_zone     = not na(ef_ote_lo) and not na(ef_ote_hi) and close >= ef_ote_lo and close <= ef_ote_hi
-ef_near_sweet_spot = ef_dist_sweet <= prox_thresh
-
-ef_near_entry_buy  = ef_anchor_dir == 1 and (ef_in_ote_zone or ef_near_sweet_spot)
-ef_near_entry_sell = ef_anchor_dir == -1 and (ef_in_ote_zone or ef_near_sweet_spot)
-ef_near_entry      = ef_near_entry_sell or ef_near_entry_buy
-
-ef_pre_trigger_raw = (ef_dist_ote_lo <= prox_thresh * ef_pre_width or ef_dist_ote_hi <= prox_thresh * ef_pre_width or ef_dist_sweet <= prox_thresh * ef_pre_width)
-
-ict_in_ote_buy  = ef_near_entry_buy
-ict_in_ote_sell = ef_near_entry_sell
+float ef_l000   = na
+float ef_l050   = na
+float ef_l062   = na
+float ef_l0705  = na
+float ef_l079   = na
+float ef_l100   = na
+float ef_lm1    = na
+float ef_lm2    = na
+float ef_lm25   = na
+float ef_lm4    = na
+float ef_l0625  = na
+float ef_l075   = na
+float ef_l0375  = na
+float ef_l025   = na
+float ef_ote_lo = na
+float ef_ote_hi = na
+float prox_pips = na
+float prox_thresh = na
+float ef_dist_ote_lo = na
+float ef_dist_ote_hi = na
+float ef_dist_sweet  = na
+bool  ef_in_ote_zone = false
+bool  ef_near_sweet_spot = false
+bool  ef_near_entry_buy  = false
+bool  ef_near_entry_sell = false
+bool  ef_near_entry      = false
+bool  ef_pre_trigger_raw = false
+bool  ict_in_ote_buy     = false
+bool  ict_in_ote_sell    = false
 // ── ICT STRUCTURE ENGINE ───────────────────────────────────────────
 ict_ph = ta.pivothigh(high, ict_struct_lb, ict_struct_lb)
 ict_pl = ta.pivotlow(low,   ict_struct_lb, ict_struct_lb)
@@ -860,6 +801,101 @@ var bool mss_bullish = false
 var bool mss_bearish = false
 mss_bullish := sweep_down and (high > nz(last_ph1, high))
 mss_bearish := sweep_up   and (low  < nz(last_pl1, low))
+
+// EF anchor selection must run after sweep/regime/MSS state is computed.
+ef_atr_now = ta.atr(14)
+ef_leg_min = ef_min_range_pips * pip_mult
+
+// Candidate execution legs must be impulse + MSS + sweep context
+bull_leg_low  = nz(last_swing_low, low)
+bull_leg_high = high
+bear_leg_high = nz(last_swing_high, high)
+bear_leg_low  = low
+
+bull_leg_range = math.abs(bull_leg_high - bull_leg_low)
+bear_leg_range = math.abs(bear_leg_high - bear_leg_low)
+
+bull_leg_valid = sweep_down and mss_bullish and bull_leg_range >= ef_leg_min and (close - bull_leg_low) >= ef_atr_now * ef_disp_mult
+bear_leg_valid = sweep_up and mss_bearish and bear_leg_range >= ef_leg_min and (bear_leg_high - close) >= ef_atr_now * ef_disp_mult
+
+if bull_leg_valid
+    ef_anchor_low  := bull_leg_low
+    ef_anchor_high := bull_leg_high
+    ef_anchor_dir  := 1
+    ef_anchor_bar  := bar_index
+else if bear_leg_valid
+    ef_anchor_low  := bear_leg_low
+    ef_anchor_high := bear_leg_high
+    ef_anchor_dir  := -1
+    ef_anchor_bar  := bar_index
+
+if ef_fallback_year and (na(ef_anchor_low) or na(ef_anchor_high) or (bar_index - nz(ef_anchor_bar, bar_index)) > ef_fresh_bars)
+    if not na(ef_curr_year_high) and not na(ef_curr_year_low)
+        ef_anchor_low  := ef_curr_year_low
+        ef_anchor_high := ef_curr_year_high
+        ef_anchor_dir  := close >= (ef_curr_year_high + ef_curr_year_low) * 0.5 ? 1 : -1
+        ef_anchor_bar  := bar_index
+
+if not na(ef_anchor_low) and not na(ef_anchor_high) and ef_anchor_high > ef_anchor_low
+    if ef_anchor_dir == 1
+        ef_0   := ef_anchor_low
+        ef_100 := ef_anchor_high
+    else
+        ef_0   := ef_anchor_high
+        ef_100 := ef_anchor_low
+else
+    ef_0   := na
+    ef_100 := na
+
+ef_range     := math.abs(ef_100 - ef_0)
+ef_ascending := ef_100 > ef_0
+ef_is_bull   := ef_anchor_dir == 1
+ef_mode_str  := ef_is_bull ? "BULL_EXEC" : ef_anchor_dir == -1 ? "BEAR_EXEC" : "NONE"
+
+ef_lvl(ratio) =>
+    if ef_ascending
+        ef_0 + ef_range * ratio
+    else
+        ef_0 - ef_range * ratio
+
+ef_l000   := ef_lvl(0.000)
+ef_l050   := ef_lvl(0.500)
+ef_l062   := ef_lvl(0.620)
+ef_l0705  := ef_lvl(0.705)
+ef_l079   := ef_lvl(0.790)
+ef_l100   := ef_lvl(1.000)
+ef_lm1    := ef_lvl(2.000)
+ef_lm2    := ef_lvl(3.000)
+ef_lm25   := ef_lvl(3.500)
+ef_lm4    := ef_lvl(5.000)
+
+// Compatibility aliases for legacy scoring paths
+ef_l0625 := ef_l062
+ef_l075  := ef_l0705
+ef_l0375 := ef_lvl(0.375)
+ef_l025  := ef_lvl(0.250)
+
+ef_ote_lo := math.min(ef_l062, ef_l079)
+ef_ote_hi := math.max(ef_l062, ef_l079)
+
+prox_pips   := pip_type == "JPY" ? ef_prox_pips_jpy : ef_prox_pips_usd
+prox_thresh := prox_pips * pip_mult
+
+ef_dist_ote_lo := math.abs(close - ef_ote_lo)
+ef_dist_ote_hi := math.abs(close - ef_ote_hi)
+ef_dist_sweet  := math.abs(close - ef_l0705)
+
+ef_in_ote_zone     := not na(ef_ote_lo) and not na(ef_ote_hi) and close >= ef_ote_lo and close <= ef_ote_hi
+ef_near_sweet_spot := ef_dist_sweet <= prox_thresh
+
+ef_near_entry_buy  := ef_anchor_dir == 1 and (ef_in_ote_zone or ef_near_sweet_spot)
+ef_near_entry_sell := ef_anchor_dir == -1 and (ef_in_ote_zone or ef_near_sweet_spot)
+ef_near_entry      := ef_near_entry_sell or ef_near_entry_buy
+
+ef_pre_trigger_raw := (ef_dist_ote_lo <= prox_thresh * ef_pre_width or ef_dist_ote_hi <= prox_thresh * ef_pre_width or ef_dist_sweet <= prox_thresh * ef_pre_width)
+
+ict_in_ote_buy  := ef_near_entry_buy
+ict_in_ote_sell := ef_near_entry_sell
 
 // PATCH J: valid_sequence window measured from sweep_bar (10 bars)
 valid_sequence = not na(sweep_bar) and not na(mss_bar) and mss_bar > sweep_bar and (bar_index - sweep_bar) <= 10
