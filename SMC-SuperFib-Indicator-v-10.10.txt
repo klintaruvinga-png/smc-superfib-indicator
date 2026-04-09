@@ -1409,7 +1409,7 @@ draw_ef_dotted_t(x_t) =>
                     _ef100_sz  = _ef100_idx == 0 ? size.small : _ef100_idx == 1 ? size.normal : _ef100_idx == 2 ? size.large : size.huge
                     label.new(x_t + f_label_pad_ms(), lo, "", xloc=xloc.bar_time, style=label.style_arrowup, color=ef_col_disc, size=_ef100_sz)
 
-sf_draw_t(p, half, stars, zone, x_t, ref_hi, ref_lo, key_idx) =>
+sf_draw_t(p, half, stars, zone, x_t, ref_hi, ref_lo, key_idx, vc) =>
     is_sell    = zone >= 1
     bc         = is_sell ? (stars == 3 ? SF_SELL_3 : stars == 2 ? SF_SELL_2 : SF_SELL_1) : (stars == 3 ? SF_BUY_3 : stars == 2 ? SF_BUY_2 : SF_BUY_1)
     border_col = color.new(color.orange, 0)
@@ -1418,7 +1418,7 @@ sf_draw_t(p, half, stars, zone, x_t, ref_hi, ref_lo, key_idx) =>
         pct_str  = sf_idx_label(key_idx)
         tc       = is_sell ? (stars == 3 ? color.new(#880000,0) : color.new(#BB2222,0)) : (stars == 3 ? color.new(#003300,0) : color.new(#226622,0))
         sz       = sf_lbl_size == "tiny" ? size.tiny : sf_lbl_size == "large" ? size.large : sf_lbl_size == "normal" ? size.normal : size.small
-        int    _ede_stars = f_hybrid_stars(p, ref_hi, ref_lo, stars)
+        int    _ede_stars = f_hybrid_stars(p, ref_hi, ref_lo, vc)
         string _star_sfx  = " " + f_star_label(_ede_stars)
         label.new(x_t + f_label_pad_ms(), p, pct_str + " @ " + str.tostring(p, format.mintick) + _star_sfx, xloc=xloc.bar_time, style=label.style_label_lower_left, color=color.new(color.white,100), textcolor=tc, size=sz)
         if show_ede_arrows and _ede_stars >= 2
@@ -2126,7 +2126,7 @@ if barstate.islast
                             _ctier     = _tier <= 1 ? 1 : _tier <= 3 ? 2 : 3
                             _ctier     := math.min(_ctier, _valid_count)
                             if not sf_is_dup(_lp, _half)
-                                sf_draw_t(_lp, _half, _ctier, _zone, _x_sf, _sf_anchor_hi, _sf_anchor_lo, _si)
+                                sf_draw_t(_lp, _half, _ctier, _zone, _x_sf, _sf_anchor_hi, _sf_anchor_lo, _si, _valid_count)
                                 array.push(_sf_drawn, _lp)
 
                 // Buy-side: indices (_idx50+1) → _sf_max  (ratio > 0.5, price < midpoint)
@@ -2141,13 +2141,13 @@ if barstate.islast
                             _ctier    = _tier <= 1 ? 1 : _tier <= 3 ? 2 : 3
                             _ctier    := math.min(_ctier, _valid_count)
                             if not sf_is_dup(_lp, _half)
-                                sf_draw_t(_lp, _half, _ctier, _zone, _x_sf, _sf_anchor_hi, _sf_anchor_lo, _bi)
+                                sf_draw_t(_lp, _half, _ctier, _zone, _x_sf, _sf_anchor_hi, _sf_anchor_lo, _bi, _valid_count)
                                 array.push(_sf_drawn, _lp)
 
                 // Equilibrium (50%) — always drawn, always lightest (tier 0 → color 1)
                 _lp50 = sf_key(_sf_anchor_hi, _sf_anchor_lo, _idx50)
                 if not na(_lp50) and not sf_is_dup(_lp50, _half)
-                    sf_draw_t(_lp50, _half, 1, 0, _x_sf, _sf_anchor_hi, _sf_anchor_lo, _idx50)
+                    sf_draw_t(_lp50, _half, 1, 0, _x_sf, _sf_anchor_hi, _sf_anchor_lo, _idx50, _valid_count)
                     array.push(_sf_drawn, _lp50)
 
 // ═══════════════════════════════════════════════════════════════════
