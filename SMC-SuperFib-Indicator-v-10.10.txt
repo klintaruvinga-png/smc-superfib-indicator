@@ -19,12 +19,9 @@ indicator("SMC SuperFib v10.11 – Indicator Integrity", overlay=true, max_lines
 //   FIX 7 — Levels sorted ascending before rendering.
 //
 //   FIX 8 — Full extension ladder: _exts expanded with 0.25,
-//            adding -25% and 125% to fib_ratios. Scoring and
-//            confluence loops gain these levels automatically.
-//   FIX 9 — SF full fib toggle: show_sf_full_fib draws the
-//            complete F3-anchored level set at the SF column
-//            (_t1) independently of confluence match status.
-//            Confluence zone boxes continue to render on top.
+//            adding -25% and 125% to the shared fib_ratios array.
+//            SF confluence engine and draw engine both gain these
+//            levels automatically. No logic changes required.
 // v10.9 PATCHES (all preserved):
 //   PATCH G–M (SF confluence, tolerance floor, mss_bar, etc.)
 //
@@ -78,7 +75,6 @@ show_f1_inp       = input.bool(false, "Show Fib 1 (oldest — thick)", group=GV,
 show_f2_inp       = input.bool(false, "Show Fib 2 (swap — purple)",  group=GV, display=display.none)
 show_f3_inp       = input.bool(true,  "Show Fib 3 (recent — thin)",  group=GV, display=display.none)
 show_superfib_inp = input.bool(true,  "Show SuperFib zones",         group=GV, display=display.none)
-show_sf_full_fib  = input.bool(false, "Show SuperFib full fib (F3 anchor)", group=GV, display=display.none)
 show_ict_fib_inp  = input.bool(false, "Show ICT OTE fib",            group=GV, display=display.none)
 show_ef           = input.bool(true,  "Show Entry Fib (EF)",         group=GV, display=display.none)
 
@@ -2051,13 +2047,6 @@ if barstate.islast
             _sf_f3 = _f3_valid
 
             array.clear(_sf_drawn)
-
-            // v10.11: Full fib from F3 anchor drawn at SF column.
-            // SF confluence boxes remain unchanged. This layer draws
-            // the complete level set so extensions are always visible
-            // at _t1 regardless of cross-fib match status.
-            if show_sf_full_fib and _sf_f3
-                draw_fib_t(_x_sf, f3_high, f3_low, false, f3_bull, 1, "SF")
 
             // v10.10: Use dynamic fib_level_count instead of hardcoded 20
             _sf_max = fib_level_count - 1
