@@ -2128,7 +2128,7 @@ if barstate.islast
                         if not na(_lp)
                             _zone                   = sf_zone(_lp, _sf_anchor_hi, _sf_anchor_lo)
                             _sf_star_raw            = f_ede_tier(_lp, _sf_anchor_hi, _sf_anchor_lo)
-                            _sf_star_bonus          = 0
+                            _sf_star_bonus          = math.max(_valid_count - 2, 0)
                             _sf_star_final_pre_mono = _sf_star_raw + _sf_star_bonus
                             _sf_star_final          = math.max(_sf_star_final_pre_mono, _mono_sell)
                             _sf_star_final          := math.clamp(_sf_star_final, 0, 5)
@@ -2146,7 +2146,7 @@ if barstate.islast
                         if not na(_lp)
                             _zone                   = sf_zone(_lp, _sf_anchor_hi, _sf_anchor_lo)
                             _sf_star_raw            = f_ede_tier(_lp, _sf_anchor_hi, _sf_anchor_lo)
-                            _sf_star_bonus          = 0
+                            _sf_star_bonus          = math.max(_valid_count - 2, 0)
                             _sf_star_final_pre_mono = _sf_star_raw + _sf_star_bonus
                             _sf_star_final          = math.max(_sf_star_final_pre_mono, _mono_buy)
                             _sf_star_final          := math.clamp(_sf_star_final, 0, 5)
