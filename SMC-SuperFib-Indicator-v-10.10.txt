@@ -1418,7 +1418,7 @@ sf_draw_t(p, half, stars, zone, x_t, ref_hi, ref_lo, key_idx, vc) =>
         pct_str  = sf_idx_label(key_idx)
         tc       = is_sell ? (stars == 3 ? color.new(#880000,0) : color.new(#BB2222,0)) : (stars == 3 ? color.new(#003300,0) : color.new(#226622,0))
         sz       = sf_lbl_size == "tiny" ? size.tiny : sf_lbl_size == "large" ? size.large : sf_lbl_size == "normal" ? size.normal : size.small
-        int    _ede_stars = f_hybrid_stars(p, ref_hi, ref_lo, vc)
+        int    _ede_stars = vc
         string _star_sfx  = " " + f_star_label(_ede_stars)
         label.new(x_t + f_label_pad_ms(), p, pct_str + " @ " + str.tostring(p, format.mintick) + _star_sfx, xloc=xloc.bar_time, style=label.style_label_lower_left, color=color.new(color.white,100), textcolor=tc, size=sz)
         if show_ede_arrows and _ede_stars >= 2
@@ -2109,7 +2109,10 @@ if barstate.islast
                         _idx50 := _si
                         break
 
-                // Running-max monotonic enforcement per side
+                // Confluence bonus: +1 for 3-fib anchor, +0 for 2-fib.
+                // Applied BEFORE monotonic enforcement. Cap +1 max.
+                // 50% (equilibrium) is hardwired to 0 — no bonus applied.
+                int _bonus     = _valid_count >= 3 ? 1 : 0
                 int _mono_sell = 0
                 int _mono_buy  = 0
 
@@ -2120,13 +2123,13 @@ if barstate.islast
                         _lp = sf_key(_sf_anchor_hi, _sf_anchor_lo, _si)
                         if not na(_lp)
                             _zone      = sf_zone(_lp, _sf_anchor_hi, _sf_anchor_lo)
-                            _tier      = f_ede_tier(_lp, _sf_anchor_hi, _sf_anchor_lo)
-                            _tier      := math.max(_tier, _mono_sell)
-                            _mono_sell := _tier
-                            _ctier     = _tier <= 1 ? 1 : _tier <= 3 ? 2 : 3
-                            _ctier     := math.min(_ctier, _valid_count)
+                            _raw       = f_ede_tier(_lp, _sf_anchor_hi, _sf_anchor_lo)
+                            _pre       = math.min(_raw + _bonus, 5)   // bonus before mono
+                            _pre       := math.max(_pre, _mono_sell)   // monotonic enforcement
+                            _mono_sell := _pre
+                            _ctier     = _pre <= 1 ? 1 : _pre <= 3 ? 2 : 3
                             if not sf_is_dup(_lp, _half)
-                                sf_draw_t(_lp, _half, _ctier, _zone, _x_sf, _sf_anchor_hi, _sf_anchor_lo, _si, _valid_count)
+                                sf_draw_t(_lp, _half, _ctier, _zone, _x_sf, _sf_anchor_hi, _sf_anchor_lo, _si, _pre)
                                 array.push(_sf_drawn, _lp)
 
                 // Buy-side: indices (_idx50+1) → _sf_max  (ratio > 0.5, price < midpoint)
@@ -2135,19 +2138,19 @@ if barstate.islast
                         _lp = sf_key(_sf_anchor_hi, _sf_anchor_lo, _bi)
                         if not na(_lp)
                             _zone     = sf_zone(_lp, _sf_anchor_hi, _sf_anchor_lo)
-                            _tier     = f_ede_tier(_lp, _sf_anchor_hi, _sf_anchor_lo)
-                            _tier     := math.max(_tier, _mono_buy)
-                            _mono_buy := _tier
-                            _ctier    = _tier <= 1 ? 1 : _tier <= 3 ? 2 : 3
-                            _ctier    := math.min(_ctier, _valid_count)
+                            _raw      = f_ede_tier(_lp, _sf_anchor_hi, _sf_anchor_lo)
+                            _pre      = math.min(_raw + _bonus, 5)    // bonus before mono
+                            _pre      := math.max(_pre, _mono_buy)     // monotonic enforcement
+                            _mono_buy := _pre
+                            _ctier    = _pre <= 1 ? 1 : _pre <= 3 ? 2 : 3
                             if not sf_is_dup(_lp, _half)
-                                sf_draw_t(_lp, _half, _ctier, _zone, _x_sf, _sf_anchor_hi, _sf_anchor_lo, _bi, _valid_count)
+                                sf_draw_t(_lp, _half, _ctier, _zone, _x_sf, _sf_anchor_hi, _sf_anchor_lo, _bi, _pre)
                                 array.push(_sf_drawn, _lp)
 
-                // Equilibrium (50%) — always drawn, always lightest (tier 0 → color 1)
+                // Equilibrium (50%) — hardwired 0 stars, no bonus, no arrow
                 _lp50 = sf_key(_sf_anchor_hi, _sf_anchor_lo, _idx50)
                 if not na(_lp50) and not sf_is_dup(_lp50, _half)
-                    sf_draw_t(_lp50, _half, 1, 0, _x_sf, _sf_anchor_hi, _sf_anchor_lo, _idx50, _valid_count)
+                    sf_draw_t(_lp50, _half, 1, 0, _x_sf, _sf_anchor_hi, _sf_anchor_lo, _idx50, 0)
                     array.push(_sf_drawn, _lp50)
 
 // ═══════════════════════════════════════════════════════════════════
