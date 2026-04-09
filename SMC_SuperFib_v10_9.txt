@@ -816,6 +816,8 @@ var bool  lockedBull = false
 
 // Detect structural change: BOS, MSS, or new swing pivot
 _structure_changed = is_hh or is_ll or is_lh or is_hl or mss_bullish or mss_bearish or not na(ph) or not na(pl)
+var bool _structure_changed_prev = false
+_structure_changed_edge = _structure_changed and not _structure_changed_prev
 if _structure_changed
     lockedHigh := nz(last_ph1, high)
     lockedLow  := nz(last_pl1, low)
@@ -831,12 +833,13 @@ _cg_valid_range = _locked_range >= cg_min_range_price
 // on the current (possibly wicky) bar. Fixes lower-TF suppression.
 var float _cg_best_body_pct = 0.0
 _cg_body_pct_now = math.abs(close - open) / math.max(high - low, syminfo.mintick)
-if _structure_changed
+if _structure_changed_edge
     // Reset on new structure — must re-prove displacement
     _cg_best_body_pct := _cg_body_pct_now
 else
     _cg_best_body_pct := math.max(_cg_best_body_pct, _cg_body_pct_now)
 _cg_valid_displacement = _cg_best_body_pct >= cg_min_body_pct
+_structure_changed_prev := _structure_changed
 
 // Master gate: both conditions required, locked values must exist
 allowFib = _cg_valid_range and _cg_valid_displacement and not na(lockedHigh) and not na(lockedLow)
