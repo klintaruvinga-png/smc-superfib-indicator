@@ -1,8 +1,16 @@
 //@version=6
-indicator("SMC SuperFib v10.12 – SF Engine Redesign", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500, max_bars_back=5000)
+indicator("SMC SuperFib v10.12.1 – SF Engine Redesign", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500, max_bars_back=5000)
 
 // ═══════════════════════════════════════════════════════════════════
-// SMC SuperFib v10.12 — SF Engine Redesign
+// SMC SuperFib v10.12.1 — SF Engine Redesign
+//
+// v10.12.1 CHANGES (over v10.12):
+//   FIX 1 — SF draw layer made pure render-only: sf_draw_t() now receives
+//            final SF stars and never recalculates with f_hybrid_stars().
+//   FIX 2 — 50% equilibrium hardwired to ★0 (no bonus, no hybrid path).
+//   FIX 3 — Final SF stars computed as raw + bonus pre-mono, then monotonic
+//            post-pass and clamp, with final stars passed directly to labels/arrows.
+//   FIX 4 — Version text synchronized across title/changelog/table.
 //
 // v10.12 CHANGES (over v10.11):
 //   REDESIGN — SF engine rebuilt as a true 3-stage architecture:
@@ -1409,22 +1417,21 @@ draw_ef_dotted_t(x_t) =>
                     _ef100_sz  = _ef100_idx == 0 ? size.small : _ef100_idx == 1 ? size.normal : _ef100_idx == 2 ? size.large : size.huge
                     label.new(x_t + f_label_pad_ms(), lo, "", xloc=xloc.bar_time, style=label.style_arrowup, color=ef_col_disc, size=_ef100_sz)
 
-sf_draw_t(p, half, stars, zone, x_t, ref_hi, ref_lo, key_idx) =>
+sf_draw_t(p, half, color_tier, sf_stars_final, zone, x_t, key_idx) =>
     is_sell    = zone >= 1
-    bc         = is_sell ? (stars == 3 ? SF_SELL_3 : stars == 2 ? SF_SELL_2 : SF_SELL_1) : (stars == 3 ? SF_BUY_3 : stars == 2 ? SF_BUY_2 : SF_BUY_1)
+    bc         = is_sell ? (color_tier == 3 ? SF_SELL_3 : color_tier == 2 ? SF_SELL_2 : SF_SELL_1) : (color_tier == 3 ? SF_BUY_3 : color_tier == 2 ? SF_BUY_2 : SF_BUY_1)
     border_col = color.new(color.orange, 0)
     box.new(x_t - _back_extension, p + half, x_t, p - half, xloc=xloc.bar_time, border_color=border_col, bgcolor=bc, border_width=2)
     if show_labels
         pct_str  = sf_idx_label(key_idx)
-        tc       = is_sell ? (stars == 3 ? color.new(#880000,0) : color.new(#BB2222,0)) : (stars == 3 ? color.new(#003300,0) : color.new(#226622,0))
+        tc       = is_sell ? (color_tier == 3 ? color.new(#880000,0) : color.new(#BB2222,0)) : (color_tier == 3 ? color.new(#003300,0) : color.new(#226622,0))
         sz       = sf_lbl_size == "tiny" ? size.tiny : sf_lbl_size == "large" ? size.large : sf_lbl_size == "normal" ? size.normal : size.small
-        int    _ede_stars = f_hybrid_stars(p, ref_hi, ref_lo, stars)
-        string _star_sfx  = " " + f_star_label(_ede_stars)
+        string _star_sfx  = " " + f_star_label(sf_stars_final)
         label.new(x_t + f_label_pad_ms(), p, pct_str + " @ " + str.tostring(p, format.mintick) + _star_sfx, xloc=xloc.bar_time, style=label.style_label_lower_left, color=color.new(color.white,100), textcolor=tc, size=sz)
-        if show_ede_arrows and _ede_stars >= 2
+        if show_ede_arrows and sf_stars_final >= 2
             _arrow_style = is_sell ? label.style_arrowdown : label.style_arrowup
             _tf_bump     = timeframe.in_seconds() >= 86400 ? 0 : timeframe.in_seconds() >= 3600 ? 1 : 2
-            _size_idx    = (_ede_stars == 2 ? 0 : _ede_stars == 3 ? 1 : _ede_stars == 4 ? 2 : 3) + _tf_bump
+            _size_idx    = (sf_stars_final == 2 ? 0 : sf_stars_final == 3 ? 1 : sf_stars_final == 4 ? 2 : 3) + _tf_bump
             _arrow_size  = _size_idx == 0 ? size.small : _size_idx == 1 ? size.normal : _size_idx == 2 ? size.large : size.huge
             _arrow_color = is_sell ? prem_key : disc_key
             label.new(x_t + f_label_pad_ms(), p, "", xloc=xloc.bar_time, style=_arrow_style, color=_arrow_color, size=_arrow_size)
@@ -1962,7 +1969,7 @@ if ict_enabled and show_ict_table and barstate.islast
     stage_col   = state == "ACTIVE" ? C_TBL_BULL : C_TBL_NEUTRAL
 
     table.cell(hm_tbl, 0,  0, "SMC SuperFIB",         text_color=C_TBL_HEAD_TXT,        text_size=size.small, bgcolor=C_TBL_BG_HEAD)
-    table.cell(hm_tbl, 1,  0, "v10.10",              text_color=color.new(#00FFFF,40), text_size=size.tiny,  bgcolor=C_TBL_BG_HEAD)
+    table.cell(hm_tbl, 1,  0, "v10.12.1",            text_color=color.new(#00FFFF,40), text_size=size.tiny,  bgcolor=C_TBL_BG_HEAD)
     table.cell(hm_tbl, 0,  1, "STRUCTURE",          text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 1,  1, struct_str,           text_color=struct_col,            text_size=size.small, bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 0,  2, "BIAS",               text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
@@ -2119,14 +2126,17 @@ if barstate.islast
                     for _si = _idx50 - 1 to 0
                         _lp = sf_key(_sf_anchor_hi, _sf_anchor_lo, _si)
                         if not na(_lp)
-                            _zone      = sf_zone(_lp, _sf_anchor_hi, _sf_anchor_lo)
-                            _tier      = f_ede_tier(_lp, _sf_anchor_hi, _sf_anchor_lo)
-                            _tier      := math.max(_tier, _mono_sell)
-                            _mono_sell := _tier
-                            _ctier     = _tier <= 1 ? 1 : _tier <= 3 ? 2 : 3
-                            _ctier     := math.min(_ctier, _valid_count)
+                            _zone                   = sf_zone(_lp, _sf_anchor_hi, _sf_anchor_lo)
+                            _sf_star_raw            = f_ede_tier(_lp, _sf_anchor_hi, _sf_anchor_lo)
+                            _sf_star_bonus          = 0
+                            _sf_star_final_pre_mono = _sf_star_raw + _sf_star_bonus
+                            _sf_star_final          = math.max(_sf_star_final_pre_mono, _mono_sell)
+                            _sf_star_final          := math.clamp(_sf_star_final, 0, 5)
+                            _mono_sell              := _sf_star_final
+                            _ctier                  = _sf_star_final <= 1 ? 1 : _sf_star_final <= 3 ? 2 : 3
+                            _ctier                  := math.min(_ctier, _valid_count)
                             if not sf_is_dup(_lp, _half)
-                                sf_draw_t(_lp, _half, _ctier, _zone, _x_sf, _sf_anchor_hi, _sf_anchor_lo, _si)
+                                sf_draw_t(_lp, _half, _ctier, _sf_star_final, _zone, _x_sf, _si)
                                 array.push(_sf_drawn, _lp)
 
                 // Buy-side: indices (_idx50+1) → _sf_max  (ratio > 0.5, price < midpoint)
@@ -2134,20 +2144,28 @@ if barstate.islast
                     for _bi = _idx50 + 1 to _sf_max
                         _lp = sf_key(_sf_anchor_hi, _sf_anchor_lo, _bi)
                         if not na(_lp)
-                            _zone     = sf_zone(_lp, _sf_anchor_hi, _sf_anchor_lo)
-                            _tier     = f_ede_tier(_lp, _sf_anchor_hi, _sf_anchor_lo)
-                            _tier     := math.max(_tier, _mono_buy)
-                            _mono_buy := _tier
-                            _ctier    = _tier <= 1 ? 1 : _tier <= 3 ? 2 : 3
-                            _ctier    := math.min(_ctier, _valid_count)
+                            _zone                   = sf_zone(_lp, _sf_anchor_hi, _sf_anchor_lo)
+                            _sf_star_raw            = f_ede_tier(_lp, _sf_anchor_hi, _sf_anchor_lo)
+                            _sf_star_bonus          = 0
+                            _sf_star_final_pre_mono = _sf_star_raw + _sf_star_bonus
+                            _sf_star_final          = math.max(_sf_star_final_pre_mono, _mono_buy)
+                            _sf_star_final          := math.clamp(_sf_star_final, 0, 5)
+                            _mono_buy               := _sf_star_final
+                            _ctier                  = _sf_star_final <= 1 ? 1 : _sf_star_final <= 3 ? 2 : 3
+                            _ctier                  := math.min(_ctier, _valid_count)
                             if not sf_is_dup(_lp, _half)
-                                sf_draw_t(_lp, _half, _ctier, _zone, _x_sf, _sf_anchor_hi, _sf_anchor_lo, _bi)
+                                sf_draw_t(_lp, _half, _ctier, _sf_star_final, _zone, _x_sf, _bi)
                                 array.push(_sf_drawn, _lp)
 
-                // Equilibrium (50%) — always drawn, always lightest (tier 0 → color 1)
+                // Equilibrium (50%) — hardwired ★0 baseline, no bonus path
                 _lp50 = sf_key(_sf_anchor_hi, _sf_anchor_lo, _idx50)
                 if not na(_lp50) and not sf_is_dup(_lp50, _half)
-                    sf_draw_t(_lp50, _half, 1, 0, _x_sf, _sf_anchor_hi, _sf_anchor_lo, _idx50)
+                    _sf_star_raw            = 0
+                    _sf_star_bonus          = 0
+                    _sf_star_final_pre_mono = 0
+                    _sf_star_final          = 0
+                    _ctier50                = 1
+                    sf_draw_t(_lp50, _half, _ctier50, _sf_star_final, 0, _x_sf, _idx50)
                     array.push(_sf_drawn, _lp50)
 
 // ═══════════════════════════════════════════════════════════════════
