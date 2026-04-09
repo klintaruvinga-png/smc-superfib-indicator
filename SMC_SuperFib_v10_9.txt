@@ -976,19 +976,20 @@ if barstate.isfirst
 fib_level_count = array.size(fib_ratios)
 
 // ── FIB PRICE CALCULATION (v10.10 — FIX 4) ───────────────────────
-// Directional: bullish => low + range*level, bearish => high - range*level
-// Ensures: negative levels extend below, positive extend above, full symmetry
-f_fib_price(hi, lo, ratio, is_bull) =>
-    rng = hi - lo
-    is_bull ? lo + rng * ratio : hi - rng * ratio
+// Uses hi - rng * ratio (same as f_lvl convention):
+//   ratio 0.0 → hi (0% premium end)
+//   ratio 1.0 → lo (100% discount end)
+//   ratio < 0  → above hi (sell-side extensions)
+//   ratio > 1  → below lo (buy-side extensions)
+// Direction (bullish/bearish) only affects labels and arrows, not prices.
+// This keeps draw_fib_t and sf_key perfectly aligned.
 
 // Legacy sf_key wrapper for SuperFib matching (uses array index)
 sf_key(hi, lo, idx) =>
     if idx >= 0 and idx < array.size(fib_ratios)
         ratio = array.get(fib_ratios, idx)
         rng = hi - lo
-        // Neutral directional calc for confluence matching
-        lo + rng * ratio
+        hi - rng * ratio
     else
         float(na)
 
@@ -1250,10 +1251,10 @@ draw_fib_t(x_t, hi, lo, is_swap, point_up, lw_base, fib_name) =>
         rng     = math.abs(hi - lo)
 
         // v10.10 FIX 2+4+7: iterate sorted dynamic fib_ratios array
+        // Price = hi - rng * ratio (non-directional, matches sf_key)
         for _idx = 0 to array.size(fib_ratios) - 1
             _ratio = array.get(fib_ratios, _idx)
-            // FIX 4: directional price calculation
-            _price = f_fib_price(hi, lo, _ratio, point_up)
+            _price = f_lvl(hi, lo, _ratio)
             _lbl   = array.get(fib_labels, _idx)
             // Classify level for color + depth
             _is_ext   = _ratio < 0.0 or _ratio > 1.0
