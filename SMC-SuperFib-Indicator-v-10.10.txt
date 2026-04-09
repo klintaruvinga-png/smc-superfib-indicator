@@ -2109,10 +2109,12 @@ if barstate.islast
                         _idx50 := _si
                         break
 
-                // Confluence bonus: +1 for 3-fib anchor, +0 for 2-fib.
+                // Confluence bonus: derived from active fib count.
+                // min(count-1, 1) → +1 for any valid anchor (2 or 3 fibs).
                 // Applied BEFORE monotonic enforcement. Cap +1 max.
                 // 50% (equilibrium) is hardwired to 0 — no bonus applied.
-                int _bonus     = _valid_count >= 3 ? 1 : 0
+                int _sf_vc  = (_sf_f1 ? 1 : 0) + (_sf_f2 ? 1 : 0) + (_sf_f3 ? 1 : 0)
+                int _bonus  = math.min(_sf_vc - 1, 1)
                 int _mono_sell = 0
                 int _mono_buy  = 0
 
