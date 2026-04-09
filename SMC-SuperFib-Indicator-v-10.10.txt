@@ -2162,6 +2162,38 @@ if barstate.islast
                                                     break
                                 if not _covered
                                     sf_draw_t(nz(pk), _half, 1, zk, _x_sf, fh, fl, ki)
+                                    array.push(_sf_drawn, nz(pk))
+
+            // Fill any remaining SF ladder levels from the F3 anchor using
+            // confluence counts computed against the active F1/F2/F3 ladders.
+            if _sf_f3
+                for ki = 0 to _sf_max
+                    pk = sf_key(f3_high, f3_low, ki)
+                    sk = sf_side(nz(pk), f3_high, f3_low)
+                    _conf = 1
+                    _hit_f1 = false
+                    _hit_f2 = false
+                    if _sf_f1
+                        for oi1 = 0 to _sf_max
+                            op1 = sf_key(f1_high, f1_low, oi1)
+                            os1 = sf_side(nz(op1), f1_high, f1_low)
+                            if os1 == sk and math.abs(nz(pk) - nz(op1)) <= _w
+                                _hit_f1 := true
+                                break
+                    if _sf_f2
+                        for oi2 = 0 to _sf_max
+                            op2 = sf_key(f2_high, f2_low, oi2)
+                            os2 = sf_side(nz(op2), f2_high, f2_low)
+                            if os2 == sk and math.abs(nz(pk) - nz(op2)) <= _w
+                                _hit_f2 := true
+                                break
+                    _conf += _hit_f1 ? 1 : 0
+                    _conf += _hit_f2 ? 1 : 0
+                    _draw_level = _conf >= 2 or (show_sf_1star and _den_full)
+                    if _draw_level and not sf_is_dup(nz(pk), _half)
+                        _disp_zone = sk == 1 ? 1 : -1
+                        sf_draw_t(nz(pk), _half, _conf, _disp_zone, _x_sf, f3_high, f3_low, ki)
+                        array.push(_sf_drawn, nz(pk))
 
 // ═══════════════════════════════════════════════════════════════════
 // ALERTS
