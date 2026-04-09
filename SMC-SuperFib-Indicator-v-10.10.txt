@@ -2131,7 +2131,7 @@ if barstate.islast
                             _sf_star_bonus          = math.max(_valid_count - 2, 0)
                             _sf_star_final_pre_mono = _sf_star_raw + _sf_star_bonus
                             _sf_star_final          = math.max(_sf_star_final_pre_mono, _mono_sell)
-                            _sf_star_final          := math.clamp(_sf_star_final, 0, 5)
+                            _sf_star_final          := math.max(0, math.min(_sf_star_final, 5))
                             _mono_sell              := _sf_star_final
                             _ctier                  = _sf_star_final <= 1 ? 1 : _sf_star_final <= 3 ? 2 : 3
                             _ctier                  := math.min(_ctier, _valid_count)
@@ -2149,7 +2149,7 @@ if barstate.islast
                             _sf_star_bonus          = math.max(_valid_count - 2, 0)
                             _sf_star_final_pre_mono = _sf_star_raw + _sf_star_bonus
                             _sf_star_final          = math.max(_sf_star_final_pre_mono, _mono_buy)
-                            _sf_star_final          := math.clamp(_sf_star_final, 0, 5)
+                            _sf_star_final          := math.max(0, math.min(_sf_star_final, 5))
                             _mono_buy               := _sf_star_final
                             _ctier                  = _sf_star_final <= 1 ? 1 : _sf_star_final <= 3 ? 2 : 3
                             _ctier                  := math.min(_ctier, _valid_count)
