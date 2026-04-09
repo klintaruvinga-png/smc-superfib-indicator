@@ -1212,7 +1212,7 @@ f_label_pad_ms() =>
      tf_secs <= 900   ? _ms_per_bar * 14 :
      tf_secs <= 3600  ? _ms_per_bar * 10 :
      tf_secs <= 14400 ? _ms_per_bar * 6  :
-                        _ms_per_bar * 3
+     _ms_per_bar * 3
 
 // ── DRAWING PRIMITIVES ────────────────────────────────────────────
 f_lvl(a, b, ratio) => a - (a - b) * ratio
