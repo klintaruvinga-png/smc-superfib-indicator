@@ -1,10 +1,10 @@
 //@version=6
-indicator("SMC SuperFib v10.10 – Indicator Integrity", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500, max_bars_back=5000)
+indicator("SMC SuperFib v10.11 – Indicator Integrity", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500, max_bars_back=5000)
 
 // ═══════════════════════════════════════════════════════════════════
-// SMC SuperFib v10.10 — Indicator Integrity Rebuild
+// SMC SuperFib v10.11 — Indicator Integrity Rebuild
 //
-// v10.10 CHANGES (over v10.9 – all previous patches preserved):
+// v10.11 CHANGES (over v10.10 – all previous patches preserved):
 //   FIX 1 — Compression guard: min swing range (pips) + displacement
 //            confirmation (body %) prevents fib drawing during chop.
 //   FIX 2 — Fib engine rebuilt: dynamic symmetric level generation
@@ -18,9 +18,10 @@ indicator("SMC SuperFib v10.10 – Indicator Integrity", overlay=true, max_lines
 //            before redraw. Performance safe.
 //   FIX 7 — Levels sorted ascending before rendering.
 //
-//   FIX 8 — Full extension ladder: _exts expanded to include 0.25,
-//            adding -25% (above high) and 125% (below low) to both
-//            the visual draw set and SF confluence candidate scan.
+//   FIX 8 — Full extension ladder: _exts expanded with 0.25,
+//            adding -25% and 125% to the shared fib_ratios array.
+//            SF confluence engine and draw engine both gain these
+//            levels automatically. No logic changes required.
 // v10.9 PATCHES (all preserved):
 //   PATCH G–M (SF confluence, tolerance floor, mss_bar, etc.)
 //
