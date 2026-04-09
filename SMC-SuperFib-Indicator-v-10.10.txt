@@ -657,10 +657,13 @@ ef_l062   = ef_lvl(0.620)
 ef_l0705  = ef_lvl(0.705)
 ef_l079   = ef_lvl(0.790)
 ef_l100   = ef_lvl(1.000)
-ef_lm1    = ef_lvl(2.000)
-ef_lm2    = ef_lvl(3.000)
-ef_lm25   = ef_lvl(3.500)
-ef_lm4    = ef_lvl(5.000)
+ef_tp_ext(mult) =>
+    ef_is_bull ? ef_l100 + ef_range * mult : ef_l100 - ef_range * mult
+
+ef_lm1    = ef_tp_ext(1.000)
+ef_lm2    = ef_tp_ext(2.000)
+ef_lm25   = ef_tp_ext(2.500)
+ef_lm4    = ef_tp_ext(4.000)
 
 // Compatibility aliases for legacy scoring paths
 ef_l0625 = ef_l062
@@ -687,8 +690,10 @@ ef_near_entry      = ef_near_entry_sell or ef_near_entry_buy
 
 ef_pre_trigger_raw = (ef_dist_ote_lo <= prox_thresh * ef_pre_width or ef_dist_ote_hi <= prox_thresh * ef_pre_width or ef_dist_sweet <= prox_thresh * ef_pre_width)
 
-ict_in_ote_buy  = ef_near_entry_buy
-ict_in_ote_sell = ef_near_entry_sell
+var bool ict_in_ote_buy  = false
+var bool ict_in_ote_sell = false
+ict_in_ote_buy  := ef_near_entry_buy
+ict_in_ote_sell := ef_near_entry_sell
 // ── ICT STRUCTURE ENGINE ───────────────────────────────────────────
 ict_ph = ta.pivothigh(high, ict_struct_lb, ict_struct_lb)
 ict_pl = ta.pivotlow(low,   ict_struct_lb, ict_struct_lb)
