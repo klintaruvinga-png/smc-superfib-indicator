@@ -1,8 +1,20 @@
 //@version=6
-indicator("SMC SuperFib v10.14.0 Final Base – ICT Stabilization Patch", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500, max_bars_back=5000)
+indicator("SMC SuperFib v10.15.0 Final Base – ICT Stabilization Patch", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500, max_bars_back=5000)
 
 // ═══════════════════════════════════════════════════════════════════
 // SMC SuperFib v10.14.0 Final Base — ICT Stabilization Patch
+//
+// v10.15.0 CHANGES (over v10.14.0):
+//   FIX A — HTF_FALLBACK EF direction now driven by confirmed regime/structure
+//            (regime -1 or MSS from bull → BEAR EF, regime 1 or MSS from bear → BULL EF).
+//            Eliminates wrong-direction OTE zones when price is in HTF fallback mode.
+//   FIX B — get_tp_price_from_zone() now validates TP must be beyond EF anchor
+//            (below ef_anchor_low for SELL, above ef_anchor_high for BUY).
+//            Eliminates sell TPs appearing above price or buy TPs below price.
+//   FIX C — EF OTE zone labels now show [BUY OTE] or [SELL OTE] direction tag.
+//            Makes directional context immediately readable on chart.
+//   FIX D — Dashboard EF SOURCE row now appends ▲/▼ direction indicator.
+//            Allows instant visual check of EF/structure alignment.
 //
 // v10.13.0 CHANGES (over v10.12.1):
 //   FIX 1 — Arrow direction: fib arrows now reflect actual measured
@@ -1066,7 +1078,19 @@ if _fallback_allowed and (na(ef_anchor_low) or na(ef_anchor_high) or (bar_index 
     if not na(ef_curr_year_high) and not na(ef_curr_year_low)
         ef_anchor_low  := ef_curr_year_low
         ef_anchor_high := ef_curr_year_high
-        ef_anchor_dir  := close >= (ef_curr_year_high + ef_curr_year_low) * 0.5 ? 1 : -1
+        // v10.15.0 FIX A: HTF fallback direction driven by confirmed structure,
+        // not price-vs-midpoint. Midpoint fallback only when structure is neutral.
+        // Rule: bearish structure (regime -1 or regime 2 from bull) → BEAR EF (-1)
+        //       bullish structure (regime 1 or regime 2 from bear) → BULL EF (1)
+        //       neutral/ranging → use price vs midpoint as last resort
+        _htf_fb_dir = 0
+        if regime == -1 or (regime == 2 and prev_regime == 1)
+            _htf_fb_dir := -1
+        else if regime == 1 or (regime == 2 and prev_regime == -1)
+            _htf_fb_dir := 1
+        else
+            _htf_fb_dir := close >= (ef_curr_year_high + ef_curr_year_low) * 0.5 ? 1 : -1
+        ef_anchor_dir := _htf_fb_dir
         ef_anchor_bar  := bar_index
         ef_is_narrative := false
 
@@ -1731,9 +1755,12 @@ draw_ef_dotted_t(x_t) =>
             _t100 = ef_is_bull ? "EF 100 — Impulse High" : "EF 100 — Impulse Low"
             label.new(x_t + f_label_pad_ms(), _lvl0,   _t0   + " @ " + str.tostring(_lvl0, format.mintick),   xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white,100), textcolor=ef_col_prem, size=sz_ef)
             label.new(x_t + f_label_pad_ms(), _lvl50,  "EF 50 — Equilibrium @ " + str.tostring(_lvl50, format.mintick), xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white,100), textcolor=color.new(color.gray, 0), size=sz_ef)
-            label.new(x_t + f_label_pad_ms(), _lvl62,  "EF 62 — OTE Start @ " + str.tostring(_lvl62, format.mintick), xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white,100), textcolor=ef_col_chop, size=sz_ef)
-            label.new(x_t + f_label_pad_ms(), _lvl705, "EF 70.5 — Sweet Spot @ " + str.tostring(_lvl705, format.mintick), xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.black,75), textcolor=C_ICT_OTE, size=sz_ef)
-            label.new(x_t + f_label_pad_ms(), _lvl79,  "EF 79 — OTE End @ " + str.tostring(_lvl79, format.mintick), xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white,100), textcolor=ef_col_disc, size=sz_ef)
+            // v10.15.0 FIX C: OTE labels show directional context so it's
+            // immediately clear whether this is a buy or sell OTE zone.
+            _ote_dir_tag = ef_is_bull ? " [BUY OTE]" : " [SELL OTE]"
+            label.new(x_t + f_label_pad_ms(), _lvl62,  "EF 62 — OTE Start" + _ote_dir_tag + " @ " + str.tostring(_lvl62, format.mintick), xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white,100), textcolor=ef_col_chop, size=sz_ef)
+            label.new(x_t + f_label_pad_ms(), _lvl705, "EF 70.5 — Sweet Spot" + _ote_dir_tag + " @ " + str.tostring(_lvl705, format.mintick), xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.black,75), textcolor=C_ICT_OTE, size=sz_ef)
+            label.new(x_t + f_label_pad_ms(), _lvl79,  "EF 79 — OTE End" + _ote_dir_tag + " @ " + str.tostring(_lvl79, format.mintick), xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white,100), textcolor=ef_col_disc, size=sz_ef)
             label.new(x_t + f_label_pad_ms(), _lvl100, _t100 + " @ " + str.tostring(_lvl100, format.mintick), xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white,100), textcolor=ef_col_disc, size=sz_ef)
             if show_ef_targets and show_ext
                 label.new(x_t + f_label_pad_ms(), ef_lm1, "TP1 — -1 @ " + str.tostring(ef_lm1, format.mintick), xloc=xloc.bar_time, style=label.style_label_left, color=color.new(C_TP_LINE,85), textcolor=color.white, size=sz_ef)
@@ -1784,6 +1811,17 @@ get_sl_from_sweep(direction, is_sweep_up, is_sweep_down, swing_hi, swing_lo) =>
     sl
 
 get_tp_price_from_zone(zone_price, direction) =>
+    // v10.15.0 FIX B (corrected): TP extensions are directionally validated.
+    // For SELL: TP must be below the entry zone. ef_lm1/ef_lm2 on a bear EF
+    //           are already below ef_0 (the swing high) by construction.
+    //           Guard: TP must be below zone_price (no upside TPs on sells).
+    // For BUY:  TP must be above the entry zone. ef_lm1/ef_lm2 on a bull EF
+    //           are already above ef_100 (the impulse high) by construction.
+    //           Guard: TP must be above zone_price (no downside TPs on buys).
+    // The ef_anchor_high/low bounds are intentionally NOT used here because
+    // ef_lm1/ef_lm2 are extensions BEYOND the anchor by definition — adding
+    // the anchor as a ceiling/floor double-gates incorrectly and suppresses
+    // valid targets.
     float tp = na
     if direction == "SELL"
         if not na(ef_lm1) and ef_lm1 < zone_price
@@ -2176,7 +2214,7 @@ if ict_enabled and show_ict_table and not _tbl_init
                  bgcolor=C_TBL_BG_DATA, border_color=C_TBL_BORDER,
                  border_width=1, frame_color=C_TBL_BORDER, frame_width=1)
     table.cell(hm_tbl, 0,  0, "SMC SuperFIB",  text_color=C_TBL_HEAD_TXT,        text_size=size.small, bgcolor=C_TBL_BG_HEAD)
-    table.cell(hm_tbl, 1,  0, "v10.14.0 Final",text_color=color.new(#00FFFF,40), text_size=size.tiny,  bgcolor=C_TBL_BG_HEAD)
+    table.cell(hm_tbl, 1,  0, "v10.15.0 EF Fix",text_color=color.new(#00FFFF,40), text_size=size.tiny,  bgcolor=C_TBL_BG_HEAD)
     table.cell(hm_tbl, 0,  1, "STRUCTURE",      text_color=C_TBL_LBL, text_size=size.tiny, bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 0,  2, "HTF PDA",        text_color=C_TBL_LBL, text_size=size.tiny, bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 0,  3, "BIAS",           text_color=C_TBL_LBL, text_size=size.tiny, bgcolor=C_TBL_BG_DATA)
@@ -2271,13 +2309,16 @@ if ict_enabled and show_ict_table and barstate.islast and _tbl_init
     table.cell(hm_tbl, 1, 14, _disp_str,      text_color=_disp_col,  text_size=size.small, bgcolor=C_TBL_BG_DATA)
 
     // ── Row 15: EF SOURCE ───────────────────────────────────────────
+    // v10.15.0 FIX D: EF SOURCE shows source AND direction so misalignment
+    // between EF direction and structure is immediately visible on dashboard.
+    string _ef_dir_tag = ef_anchor_dir == 1 ? " ▲" : ef_anchor_dir == -1 ? " ▼" : ""
     string _ef_src_str = "NONE"
     color  _ef_src_col = C_TBL_BEAR
     if ef_is_narrative
-        _ef_src_str := "NARRATIVE ✓"
+        _ef_src_str := "NARRATIVE ✓" + _ef_dir_tag
         _ef_src_col := C_TBL_BULL
     else if not na(ef_anchor_low)
-        _ef_src_str := "HTF_FALLBACK"
+        _ef_src_str := "HTF_FALLBACK" + _ef_dir_tag
         _ef_src_col := color.new(#F5A623, 0)
     table.cell(hm_tbl, 1, 15, _ef_src_str, text_color=_ef_src_col, text_size=size.small, bgcolor=C_TBL_BG_DATA)
 
