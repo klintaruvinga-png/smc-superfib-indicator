@@ -815,7 +815,7 @@ if alert_bar_ready
     if swp_cand_dir != 0
         if swp_accept_count >= 2
             _cand_expired := true
-        if not na(swp_cand_bar) and (bar_index - swp_cand_bar) > (sweep_confirm_bars + 1)
+        if not na(swp_cand_bar) and (bar_index - swp_cand_bar) > sweep_confirm_bars
             _cand_expired := true
     if _cand_expired
         swp_cand_dir     := 0
@@ -943,8 +943,8 @@ _disp_body_ratio  = math.abs(close - open) / math.max(high - low, syminfo.mintic
 _disp_range_atr   = ef_atr_now > 0 ? (high - low) / ef_atr_now : 0.0
 _disp_fvg_bull    = low > high[2]
 _disp_fvg_bear    = high < low[2]
-_disp_extend_bull = not na(last_pl1) ? (close - last_pl1) >= ef_atr_now * 0.2 : false
-_disp_extend_bear = not na(last_ph1) ? (last_ph1 - close) >= ef_atr_now * 0.2 : false
+_disp_extend_bull = not na(last_ph1) ? (close - last_ph1) >= ef_atr_now * 0.2 : false
+_disp_extend_bear = not na(last_pl1) ? (last_pl1 - close) >= ef_atr_now * 0.2 : false
 
 _disp_score_bull = (_disp_body_ratio >= 0.55 ? 1 : 0) +
                    (_disp_range_atr   >= 1.30 ? 1 : 0) +
