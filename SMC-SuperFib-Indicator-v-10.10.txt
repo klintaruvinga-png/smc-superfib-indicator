@@ -143,6 +143,9 @@ htf_tf            = input.string("D", "HTF confluence timeframe",   options=["60
 anchor_bars       = input.int(50, "SL/TP right anchor (bars)", minval=10, maxval=500, group=GN, display=display.none)
 sweep_confirm_bars = input.int(2,    "Sweep reclaim window (bars)",          minval=1, maxval=5,  group=GN, display=display.none)
 mss_confirm_bars   = input.int(5,    "MSS confirm window after sweep (bars)", minval=2, maxval=12, group=GN, display=display.none)
+exec_pivot_lb      = input.int(4,    "Execution pivot lookback (bars)",        minval=2, maxval=10, group=GN, display=display.none)
+sweep_min_tier     = input.string("Tier2", "Minimum sweep candidate tier",
+    options=["Tier1","Tier2","Tier3"], group=GN, display=display.none)
 require_disp_mss   = input.bool(true,"Require displacement for MSS",          group=GN, display=display.none)
 ef_ltf_no_fallback = input.bool(true,"Disable year-fallback EF on 1H and below", group=GN, display=display.none)
 
@@ -785,6 +788,21 @@ if not na(pl)
 
 last_swing_high := nz(last_ph1, high)
 last_swing_low  := nz(last_pl1, low)
+
+// ── EXECUTION PIVOT ENGINE — internal structure for post-sweep MSS ──
+// Faster, tighter pivot reference. Used exclusively for MSS confirmation.
+// Kept separate from regime pivots (swing_lookback) intentionally.
+exec_ph = ta.pivothigh(high, exec_pivot_lb, exec_pivot_lb)
+exec_pl = ta.pivotlow(low,   exec_pivot_lb, exec_pivot_lb)
+
+var float exec_sh1 = na   // most recent confirmed internal swing high
+var float exec_sl1 = na   // most recent confirmed internal swing low
+
+if not na(exec_ph)
+    exec_sh1 := exec_ph
+if not na(exec_pl)
+    exec_sl1 := exec_pl
+
 alert_bar_ready = not alert_confirmed_only or barstate.isconfirmed
 
 bos_thresh = pip_type == "JPY" ? bos_min_pips_jpy * 0.01 : bos_min_pips_usd * 0.0001
@@ -795,9 +813,32 @@ eqh_price  = eqh_active ? math.max(last_ph1, last_ph2) : na
 eql_price  = eql_active ? math.min(last_pl1, last_pl2) : na
 
 // ── STAGED SWEEP LOGIC v10.14.0 ────────────────────────────────────
-// Reference liquidity levels — prefer ranked pool over raw swing
-_liq_high_ref = eqh_active and not na(eqh_price) ? eqh_price : (not na(pdh) ? pdh : (not na(pwh) ? pwh : last_swing_high))
-_liq_low_ref  = eql_active and not na(eql_price) ? eql_price : (not na(pdl) ? pdl : (not na(pwl) ? pwl : last_swing_low))
+// ── LIQUIDITY TIER RESOLUTION ─────────────────────────────────────
+// Tier 1 pool: EQH/EQL, PDH/PDL, PWH/PWL — institutional references
+_tier1_high = eqh_active and not na(eqh_price) ? eqh_price :
+              not na(pdh) ? pdh :
+              not na(pwh) ? pwh : float(na)
+_tier1_low  = eql_active and not na(eql_price) ? eql_price :
+              not na(pdl) ? pdl :
+              not na(pwl) ? pwl : float(na)
+
+// Tier 2 pool: obvious external swing (regime pivot)
+_tier2_high = not na(last_ph1) ? last_ph1 : float(na)
+_tier2_low  = not na(last_pl1) ? last_pl1 : float(na)
+
+// Tier 3 pool: internal swing (execution pivot — tightest, most permissive)
+_tier3_high = not na(exec_sh1) ? exec_sh1 : float(na)
+_tier3_low  = not na(exec_sl1) ? exec_sl1 : float(na)
+
+// Apply minimum tier gate
+_liq_high_ref = not na(_tier1_high) ? _tier1_high :
+                sweep_min_tier != "Tier1" and not na(_tier2_high) ? _tier2_high :
+                sweep_min_tier == "Tier3" and not na(_tier3_high) ? _tier3_high :
+                float(na)
+_liq_low_ref  = not na(_tier1_low) ? _tier1_low :
+                sweep_min_tier != "Tier1" and not na(_tier2_low) ? _tier2_low :
+                sweep_min_tier == "Tier3" and not na(_tier3_low) ? _tier3_low :
+                float(na)
 
 // Reset single-bar event booleans each bar
 sweep_up             := false
@@ -828,14 +869,14 @@ if alert_bar_ready
 
     // ── STAGE A: SET CANDIDATE ──────────────────────────────────────
     // Bear raid: price pokes above liquidity high
-    if swp_cand_dir == 0 and high > _liq_high_ref
+    if swp_cand_dir == 0 and not na(_liq_high_ref) and high > _liq_high_ref
         swp_cand_dir     := 1
         swp_cand_price   := _liq_high_ref
         swp_cand_bar     := bar_index
         swp_accept_count := 0
 
     // Bull raid: price pokes below liquidity low
-    if swp_cand_dir == 0 and low < _liq_low_ref
+    if swp_cand_dir == 0 and not na(_liq_low_ref) and low < _liq_low_ref
         swp_cand_dir     := -1
         swp_cand_price   := _liq_low_ref
         swp_cand_bar     := bar_index
@@ -939,8 +980,8 @@ _disp_body_ratio  = math.abs(close - open) / math.max(high - low, syminfo.mintic
 _disp_range_atr   = ef_atr_now > 0 ? (high - low) / ef_atr_now : 0.0
 _disp_fvg_bull    = low > high[2]
 _disp_fvg_bear    = high < low[2]
-_disp_extend_bull = not na(last_ph1) ? (close - last_ph1) >= ef_atr_now * 0.2 : false
-_disp_extend_bear = not na(last_pl1) ? (last_pl1 - close) >= ef_atr_now * 0.2 : false
+_disp_extend_bull = not na(exec_sh1) ? (close - exec_sh1) >= ef_atr_now * 0.2 : false
+_disp_extend_bear = not na(exec_sl1) ? (exec_sl1 - close) >= ef_atr_now * 0.2 : false
 
 _disp_score_bull = (_disp_body_ratio >= 0.55 ? 1 : 0) +
                    (_disp_range_atr   >= 1.30 ? 1 : 0) +
@@ -960,8 +1001,8 @@ mss_bearish := false
 
 if not na(_mss_sweep_bar) and alert_bar_ready
     if (bar_index - _mss_sweep_bar) <= mss_confirm_bars
-        // Bullish MSS: after confirmed_sweep_down, break above last swing high
-        if _mss_sweep_dir == -1 and not na(last_ph1) and high > last_ph1
+        // Bullish MSS: after confirmed_sweep_down, break above nearest internal high
+        if _mss_sweep_dir == -1 and not na(exec_sh1) and high > exec_sh1
             bool _disp_ok = require_disp_mss ? _displacement_ok_bull : true
             if _disp_ok
                 mss_bullish            := true
@@ -971,8 +1012,8 @@ if not na(_mss_sweep_bar) and alert_bar_ready
                 _mss_sweep_bar         := na
                 _mss_sweep_dir         := 0
 
-        // Bearish MSS: after confirmed_sweep_up, break below last swing low
-        if _mss_sweep_dir == 1 and not na(last_pl1) and low < last_pl1
+        // Bearish MSS: after confirmed_sweep_up, break below nearest internal low
+        if _mss_sweep_dir == 1 and not na(exec_sl1) and low < exec_sl1
             bool _disp_ok = require_disp_mss ? _displacement_ok_bear : true
             if _disp_ok
                 mss_bearish            := true
@@ -992,9 +1033,9 @@ if mss_bullish or mss_bearish
 ef_leg_min = ef_min_range_pips * pip_mult
 
 // Candidate execution legs must be impulse + MSS + sweep context
-bull_leg_low  = nz(last_swing_low, low)
+bull_leg_low  = not na(exec_sl1) ? exec_sl1 : nz(last_swing_low, low)
 bull_leg_high = high
-bear_leg_high = nz(last_swing_high, high)
+bear_leg_high = not na(exec_sh1) ? exec_sh1 : nz(last_swing_high, high)
 bear_leg_low  = low
 
 bull_leg_range = math.abs(bull_leg_high - bull_leg_low)
@@ -1344,6 +1385,10 @@ base_stars_at_close() =>
                                             break
                         if _count > _best
                             _best := _count
+                        if _best >= 3  // maximum possible — exit early
+                            break
+                if _best >= 3  // maximum possible — exit early
+                    break
         _best
 
 depth_bonus_at_close(pz) =>
@@ -1867,12 +1912,20 @@ gen_ladder_id(direction) =>
 spread_val() =>
     pip_type == "JPY" ? 0.15 * pip_mult : 0.00015
 
+// ── PER-BAR SCORE CACHE ────────────────────────────────────────────
+// Computed once, reused in signal block, EF pretrig, and opposing check
+_need_star_cache = show_signals or (show_ef_pretrig and ef_pretrig_filter)
+_cached_pz  = _need_star_cache ? cur_price_zone()               : 0
+_cached_bst = _need_star_cache ? base_stars_at_close()          : 0
+_cached_dbo = _need_star_cache ? depth_bonus_at_close(_cached_pz) : 0
+_cached_pab = _need_star_cache ? pivot_approach_bonus(_cached_pz) : 0
+
 // ── SIGNAL CREATION ────────────────────────────────────────────────
 if show_signals and regime_ok
-    pz  = cur_price_zone()
-    bst = base_stars_at_close()
-    dbo = depth_bonus_at_close(pz)
-    pab = pivot_approach_bonus(pz)
+    pz  = _cached_pz
+    bst = _cached_bst
+    dbo = _cached_dbo
+    pab = _cached_pab
     // v10.13.0: HTF PDA nesting — increased weighting
     htf_fvg_bonus   = (pz == -1 and htf_bull_fvg) or (pz == 1 and htf_bear_fvg) ? 2 : 0
     htf_trend_bonus = (pz == -1 and htf_trend == 1) or (pz == 1 and htf_trend == -1) ? 1 : 0
@@ -1996,6 +2049,9 @@ if show_signals and regime_ok
                     ladder_alert_sent := true
 
 // ── LADDER LIFECYCLE ───────────────────────────────────────────────
+var bool _reset_ladder = false
+_reset_ladder := false
+
 if state == "ACTIVE" and alert_bar_ready
     e0_price = array.get(ladder_entries, 0)
     e1_price = array.get(ladder_entries, 1)
@@ -2038,98 +2094,34 @@ if state == "ACTIVE" and alert_bar_ready
 
     // Expiration check
     if not na(signal_bar) and bar_index - signal_bar > signal_valid_bars
-        state            := "INVALID"
-        ladder_id        := na
-        ladder_direction := na
-        array.set(ladder_entries, 0, float(na))
-        array.set(ladder_entries, 1, float(na))
-        array.set(ladder_entries, 2, float(na))
-        ladder_sl        := na
-        ladder_tp        := na
-        signal_bar       := na
-        e1_filled        := false
-        e2_filled        := false
-        e3_filled        := false
-        e1_alert_sent    := false
-        e2_alert_sent    := false
-        e3_alert_sent    := false
-        ladder_score_val := 0
-        ladder_model     := na
-        ladder_zone_price := na
-        ladder_alert_sent := false
-        sweep_bar        := na
+        _reset_ladder := true
 
     // SL hit — SELL
     if not na(ladder_sl) and ladder_direction == "SELL" and high >= ladder_sl
-        state            := "INVALID"
-        ladder_id        := na
-        ladder_direction := na
-        array.set(ladder_entries, 0, float(na))
-        array.set(ladder_entries, 1, float(na))
-        array.set(ladder_entries, 2, float(na))
-        ladder_sl        := na
-        ladder_tp        := na
-        signal_bar       := na
-        e1_filled        := false
-        e2_filled        := false
-        e3_filled        := false
-        e1_alert_sent    := false
-        e2_alert_sent    := false
-        e3_alert_sent    := false
-        ladder_score_val := 0
-        ladder_model     := na
-        ladder_zone_price := na
-        ladder_alert_sent := false
-        sweep_bar        := na
+        _reset_ladder := true
 
     // SL hit — BUY
     if not na(ladder_sl) and ladder_direction == "BUY" and low <= ladder_sl
-        state            := "INVALID"
-        ladder_id        := na
-        ladder_direction := na
-        array.set(ladder_entries, 0, float(na))
-        array.set(ladder_entries, 1, float(na))
-        array.set(ladder_entries, 2, float(na))
-        ladder_sl        := na
-        ladder_tp        := na
-        signal_bar       := na
-        e1_filled        := false
-        e2_filled        := false
-        e3_filled        := false
-        e1_alert_sent    := false
-        e2_alert_sent    := false
-        e3_alert_sent    := false
-        ladder_score_val := 0
-        ladder_model     := na
-        ladder_zone_price := na
-        ladder_alert_sent := false
-        sweep_bar        := na
+        _reset_ladder := true
 
     // TP hit — SELL
     if not na(ladder_tp) and ladder_direction == "SELL" and low <= ladder_tp
-        state            := "INVALID"
-        ladder_id        := na
-        ladder_direction := na
-        array.set(ladder_entries, 0, float(na))
-        array.set(ladder_entries, 1, float(na))
-        array.set(ladder_entries, 2, float(na))
-        ladder_sl        := na
-        ladder_tp        := na
-        signal_bar       := na
-        e1_filled        := false
-        e2_filled        := false
-        e3_filled        := false
-        e1_alert_sent    := false
-        e2_alert_sent    := false
-        e3_alert_sent    := false
-        ladder_score_val := 0
-        ladder_model     := na
-        ladder_zone_price := na
-        ladder_alert_sent := false
-        sweep_bar        := na
+        _reset_ladder := true
 
     // TP hit — BUY
     if not na(ladder_tp) and ladder_direction == "BUY" and high >= ladder_tp
+        _reset_ladder := true
+
+    // Opposing signal
+    if state == "ACTIVE"
+        sc_new  = compute_score(_cached_pz, _cached_bst)
+        opposing_sell = ladder_direction == "BUY"  and _cached_pz == 1  and sweep_up   and mss_bearish and sc_new >= score_threshold
+        opposing_buy  = ladder_direction == "SELL" and _cached_pz == -1 and sweep_down and mss_bullish  and sc_new >= score_threshold
+        if opposing_sell or opposing_buy
+            _reset_ladder := true
+
+    // Consolidated ladder reset
+    if _reset_ladder
         state            := "INVALID"
         ladder_id        := na
         ladder_direction := na
@@ -2150,35 +2142,6 @@ if state == "ACTIVE" and alert_bar_ready
         ladder_zone_price := na
         ladder_alert_sent := false
         sweep_bar        := na
-
-    // Opposing signal
-    if state == "ACTIVE"
-        pz_new  = cur_price_zone()
-        bst_new = base_stars_at_close()
-        sc_new  = compute_score(pz_new, bst_new)
-        opposing_sell = ladder_direction == "BUY"  and pz_new == 1  and sweep_up   and mss_bearish and sc_new >= score_threshold
-        opposing_buy  = ladder_direction == "SELL" and pz_new == -1 and sweep_down and mss_bullish  and sc_new >= score_threshold
-        if opposing_sell or opposing_buy
-            state            := "INVALID"
-            ladder_id        := na
-            ladder_direction := na
-            array.set(ladder_entries, 0, float(na))
-            array.set(ladder_entries, 1, float(na))
-            array.set(ladder_entries, 2, float(na))
-            ladder_sl        := na
-            ladder_tp        := na
-            signal_bar       := na
-            e1_filled        := false
-            e2_filled        := false
-            e3_filled        := false
-            e1_alert_sent    := false
-            e2_alert_sent    := false
-            e3_alert_sent    := false
-            ladder_score_val := 0
-            ladder_model     := na
-            ladder_zone_price := na
-            ladder_alert_sent := false
-            sweep_bar        := na
 
 // ── PLOTSHAPES ─────────────────────────────────────────────────────
 plotshape(state == "ACTIVE" and ladder_direction == "BUY",  "Signal Buy",  shape.triangleup,   location.belowbar, color.new(C_BUY_ENTRY, 40),  size=size.tiny, display=display.all - display.status_line)
@@ -2189,8 +2152,8 @@ plotshape(state == "ACTIVE" and ladder_direction == "SELL", "Signal Sell", shape
 // ═══════════════════════════════════════════════════════════════════
 var int ef_pretrig_last_bar = 0
 
-ef_pretrig_sell_gate = (not ef_pretrig_filter) or (regime_ok and cur_price_zone() == 1  and base_stars_at_close() >= 2)
-ef_pretrig_buy_gate  = (not ef_pretrig_filter) or (regime_ok and cur_price_zone() == -1 and base_stars_at_close() >= 2)
+ef_pretrig_sell_gate = (not ef_pretrig_filter) or (regime_ok and _cached_pz == 1  and _cached_bst >= 2)
+ef_pretrig_buy_gate  = (not ef_pretrig_filter) or (regime_ok and _cached_pz == -1 and _cached_bst >= 2)
 ef_pretrig_sell = ef_pre_trigger_raw and ef_near_entry_sell and ef_pretrig_sell_gate and sweep_up and (bar_index - ef_pretrig_last_bar) >= ef_pretrig_cooldown and not ef_pre_trigger_raw[1]
 ef_pretrig_buy  = ef_pre_trigger_raw and ef_near_entry_buy  and ef_pretrig_buy_gate  and sweep_down and (bar_index - ef_pretrig_last_bar) >= ef_pretrig_cooldown and not ef_pre_trigger_raw[1]
 
@@ -2205,14 +2168,34 @@ if show_ef_pretrig and (ef_pretrig_sell or ef_pretrig_buy)
 // HEATMAP TABLE
 // ═══════════════════════════════════════════════════════════════════
 var table hm_tbl = na
-if ict_enabled and show_ict_table and barstate.islast
-    if not na(hm_tbl)
-        table.delete(hm_tbl)
-    hm_tbl := table.new(position.top_right, 2, 16,
-                         bgcolor=C_TBL_BG_DATA,
-                         border_color=C_TBL_BORDER, border_width=1,
-                         frame_color=C_TBL_BORDER,  frame_width=1)
+var bool _tbl_init = false
 
+// Create table and static column-0 labels once
+if ict_enabled and show_ict_table and not _tbl_init
+    hm_tbl := table.new(position.top_right, 2, 16,
+                 bgcolor=C_TBL_BG_DATA, border_color=C_TBL_BORDER,
+                 border_width=1, frame_color=C_TBL_BORDER, frame_width=1)
+    table.cell(hm_tbl, 0,  0, "SMC SuperFIB",  text_color=C_TBL_HEAD_TXT,        text_size=size.small, bgcolor=C_TBL_BG_HEAD)
+    table.cell(hm_tbl, 1,  0, "v10.14.0 Final",text_color=color.new(#00FFFF,40), text_size=size.tiny,  bgcolor=C_TBL_BG_HEAD)
+    table.cell(hm_tbl, 0,  1, "STRUCTURE",      text_color=C_TBL_LBL, text_size=size.tiny, bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 0,  2, "HTF PDA",        text_color=C_TBL_LBL, text_size=size.tiny, bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 0,  3, "BIAS",           text_color=C_TBL_LBL, text_size=size.tiny, bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 0,  4, "BULL PRESS",     text_color=C_TBL_LBL, text_size=size.tiny, bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 0,  5, "BEAR PRESS",     text_color=C_TBL_LBL, text_size=size.tiny, bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 0,  6, "EF OTE",         text_color=C_TBL_LBL, text_size=size.tiny, bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 0,  7, "SCORE",          text_color=C_TBL_LBL, text_size=size.tiny, bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 0,  8, "LIQ SWEEP",      text_color=C_TBL_LBL, text_size=size.tiny, bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 0,  9, "MSS STATE",      text_color=C_TBL_LBL, text_size=size.tiny, bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 0, 10, "ENTRY VALID",    text_color=C_TBL_LBL, text_size=size.tiny, bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 0, 11, "STAGE",          text_color=C_TBL_LBL, text_size=size.tiny, bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 0, 12, "SEQUENCE",       text_color=C_TBL_LBL, text_size=size.tiny, bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 0, 13, "SWEEP STATE",    text_color=C_TBL_LBL, text_size=size.tiny, bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 0, 14, "DISPLACEMENT",   text_color=C_TBL_LBL, text_size=size.tiny, bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 0, 15, "EF SOURCE",      text_color=C_TBL_LBL, text_size=size.tiny, bgcolor=C_TBL_BG_DATA)
+    _tbl_init := true
+
+// Update dynamic column-1 values every islast tick
+if ict_enabled and show_ict_table and barstate.islast and _tbl_init
     bias_col    = pressure_bias > ict_bias_gate ? C_TBL_BULL : pressure_bias < -ict_bias_gate ? C_TBL_BEAR : C_TBL_NEUTRAL
     bias_str    = pressure_bias > ict_bias_gate ? "▲ BULL" : pressure_bias < -ict_bias_gate ? "▼ BEAR" : "— NEUTRAL"
     struct_str  = ict_struct_trend == 1 ? "▲ BULL" : ict_struct_trend == -1 ? "▼ BEAR" : ict_struct_trend == 2 ? "⚡ MSS" : "— NEUTRAL"
@@ -2228,57 +2211,46 @@ if ict_enabled and show_ict_table and barstate.islast
     ev_col      = state == "ACTIVE" ? C_TBL_BULL : C_TBL_BEAR
     stage_col   = state == "ACTIVE" ? C_TBL_BULL : C_TBL_NEUTRAL
 
-    table.cell(hm_tbl, 0,  0, "SMC SuperFIB",         text_color=C_TBL_HEAD_TXT,        text_size=size.small, bgcolor=C_TBL_BG_HEAD)
-    table.cell(hm_tbl, 1,  0, "v10.14.0 Final",     text_color=color.new(#00FFFF,40), text_size=size.tiny,  bgcolor=C_TBL_BG_HEAD)
-    table.cell(hm_tbl, 0,  1, "STRUCTURE",          text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 1,  1, struct_str,           text_color=struct_col,            text_size=size.small, bgcolor=C_TBL_BG_DATA)
-    table.cell(hm_tbl, 0,  2, "HTF PDA",            text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 1,  2, htf_pda_str,          text_color=htf_pda_col,           text_size=size.small, bgcolor=C_TBL_BG_DATA)
-    table.cell(hm_tbl, 0,  3, "BIAS",               text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 1,  3, bias_str,             text_color=bias_col,              text_size=size.small, bgcolor=C_TBL_BG_DATA)
-    table.cell(hm_tbl, 0,  4, "BULL PRESS",         text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 1,  4, bull_pct,             text_color=C_TBL_BULL,            text_size=size.small, bgcolor=C_TBL_BG_DATA)
-    table.cell(hm_tbl, 0,  5, "BEAR PRESS",         text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 1,  5, bear_pct,             text_color=C_TBL_BEAR,            text_size=size.small, bgcolor=C_TBL_BG_DATA)
-    table.cell(hm_tbl, 0,  6, "EF OTE",            text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 1,  6, in_ote_str,           text_color=in_ote_col,            text_size=size.small, bgcolor=C_TBL_BG_DATA)
-    table.cell(hm_tbl, 0,  7, "SCORE",              text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 1,  7, str.tostring(score) + " / " + str.tostring(score_threshold), text_color=score_col, text_size=size.small, bgcolor=C_TBL_BG_DATA)
-    table.cell(hm_tbl, 0,  8, "LIQ SWEEP",          text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 1,  8, sweep_up ? "UP" : sweep_down ? "DOWN" : "NONE", text_color=color.new(#DDE4F0,0), text_size=size.small, bgcolor=C_TBL_BG_DATA)
-    table.cell(hm_tbl, 0,  9, "MSS STATE",          text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 1,  9, mss_bullish ? "BULL" : mss_bearish ? "BEAR" : "NONE", text_color=color.new(#DDE4F0,0), text_size=size.small, bgcolor=C_TBL_BG_DATA)
-    table.cell(hm_tbl, 0, 10, "ENTRY VALID",        text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 1, 10, state == "ACTIVE" ? "YES" : "NO", text_color=ev_col, text_size=size.small, bgcolor=C_TBL_BG_DATA)
-    table.cell(hm_tbl, 0, 11, "STAGE",              text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 1, 11, state,                text_color=stage_col,            text_size=size.small, bgcolor=C_TBL_BG_DATA)
     seq_str = sequence_status
     seq_col = seq_str == "READY" ? C_TBL_BULL : seq_str == "AWAIT MSS" ? color.new(#F5A623,0) : C_TBL_BEAR
-    table.cell(hm_tbl, 0, 12, "SEQUENCE",           text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 1, 12, seq_str,              text_color=seq_col,              text_size=size.small, bgcolor=C_TBL_BG_DATA)
 
     // ── Row 13: SWEEP STATE ─────────────────────────────────────────
+    _swp_tier_str = not na(_tier1_high) or not na(_tier1_low) ? " T1" :
+                    not na(_tier2_high) or not na(_tier2_low) ? " T2" :
+                    not na(_tier3_high) or not na(_tier3_low) ? " T3" : ""
+
     string _swp_state_str = "NONE"
     color  _swp_state_col = C_TBL_BEAR
     if swp_cand_dir == 1
-        _swp_state_str := "CAND UP"
+        _swp_state_str := "CAND UP" + _swp_tier_str
         _swp_state_col := color.new(#F5A623, 0)
     else if swp_cand_dir == -1
-        _swp_state_str := "CAND DOWN"
+        _swp_state_str := "CAND DN" + _swp_tier_str
         _swp_state_col := color.new(#F5A623, 0)
     else if sweep_up
         _swp_state_str := "CONF UP ✓"
         _swp_state_col := C_TBL_BULL
     else if sweep_down
-        _swp_state_str := "CONF DOWN ✓"
+        _swp_state_str := "CONF DN ✓"
         _swp_state_col := C_TBL_BULL
     else if last_confirmed_sweep_dir == 1
         _swp_state_str := "LAST: UP"
         _swp_state_col := C_TBL_NEUTRAL
     else if last_confirmed_sweep_dir == -1
-        _swp_state_str := "LAST: DOWN"
+        _swp_state_str := "LAST: DN"
         _swp_state_col := C_TBL_NEUTRAL
-    table.cell(hm_tbl, 0, 13, "SWEEP STATE",  text_color=C_TBL_LBL,       text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 1, 13, _swp_state_str, text_color=_swp_state_col,  text_size=size.small, bgcolor=C_TBL_BG_DATA)
 
     // ── Row 14: DISPLACEMENT ────────────────────────────────────────
@@ -2296,7 +2268,6 @@ if ict_enabled and show_ict_table and barstate.islast
     else if last_confirmed_mss_dir == -1
         _disp_str := last_disp_ok_bear ? "LAST: PASS ▼" : "LAST: WEAK ▼"
         _disp_col := C_TBL_NEUTRAL
-    table.cell(hm_tbl, 0, 14, "DISPLACEMENT", text_color=C_TBL_LBL,  text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 1, 14, _disp_str,      text_color=_disp_col,  text_size=size.small, bgcolor=C_TBL_BG_DATA)
 
     // ── Row 15: EF SOURCE ───────────────────────────────────────────
@@ -2308,7 +2279,6 @@ if ict_enabled and show_ict_table and barstate.islast
     else if not na(ef_anchor_low)
         _ef_src_str := "HTF_FALLBACK"
         _ef_src_col := color.new(#F5A623, 0)
-    table.cell(hm_tbl, 0, 15, "EF SOURCE",  text_color=C_TBL_LBL,  text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 1, 15, _ef_src_str, text_color=_ef_src_col, text_size=size.small, bgcolor=C_TBL_BG_DATA)
 
 // ── SF DRAW DEDUPLICATION ─────────────────────────────────────────
@@ -2327,7 +2297,25 @@ sf_is_dup(price, half) =>
 // MAIN DRAW — barstate.islast gate only
 // v10.10: Clear previous objects, apply allowFib compression guard
 // ═══════════════════════════════════════════════════════════════════
-if barstate.islast
+var float _last_f1h = na
+var float _last_f1l = na
+var float _last_f2h = na
+var float _last_f2l = na
+var float _last_f3h = na
+var float _last_f3l = na
+var float _last_efh = na
+var float _last_efl = na
+var bool  _last_allowFib = false
+
+_anchors_changed = barstate.islast and (
+    nz(f1_high) != nz(_last_f1h) or nz(f1_low)  != nz(_last_f1l) or
+    nz(f2_high) != nz(_last_f2h) or nz(f2_low)  != nz(_last_f2l) or
+    nz(f3_high) != nz(_last_f3h) or nz(f3_low)  != nz(_last_f3l) or
+    nz(ef_anchor_high) != nz(_last_efh) or
+    nz(ef_anchor_low)  != nz(_last_efl) or
+    allowFib != _last_allowFib)
+
+if _anchors_changed
     // FIX 6: Delete all previous fib objects before redraw
     f_clear_fib_objects()
 
@@ -2475,6 +2463,16 @@ if barstate.islast
                     _ctier50                = 1
                     sf_draw_t(_lp50, _half, _ctier50, _sf_star_final, 0, _x_sf, _idx50)
                     array.push(_sf_drawn, _lp50)
+
+    _last_f1h      := nz(f1_high)
+    _last_f1l      := nz(f1_low)
+    _last_f2h      := nz(f2_high)
+    _last_f2l      := nz(f2_low)
+    _last_f3h      := nz(f3_high)
+    _last_f3l      := nz(f3_low)
+    _last_efh      := nz(ef_anchor_high)
+    _last_efl      := nz(ef_anchor_low)
+    _last_allowFib := allowFib
 
 // ═══════════════════════════════════════════════════════════════════
 // ALERTS
