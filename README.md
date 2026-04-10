@@ -1,62 +1,76 @@
 # SMC SuperFib Indicator
 
-SMC SuperFib is a **TradingView Pine Script v6** indicator designed around Smart Money Concepts (SMC) and ICT-style dealing ranges. It combines multi-session Fibonacci anchors, confluence-derived SuperFib zones, structure confirmation, and execution filters to help identify cleaner premium/discount setups.
+## Current version
 
-The current script in this repository is:
+**v10.14.0 Final Base — ICT Stabilization Patch**
 
-- **Name:** `SMC SuperFib v10.12.1 – SF Engine Redesign`
-- **Source file:** `SMC-SuperFib-Indicator-v-10.10.txt` (contains the v10.12.1 script)
+The source file in this repository is `SMC-SuperFib-Indicator-v-10.10.txt`.
+This is a legacy filename — it contains the **v10.14.0 Final Base** script.
 
 ---
 
 ## What the indicator does
 
-SMC SuperFib overlays several market-structure and confluence components on the chart:
+SMC SuperFib is a TradingView Pine Script v6 overlay indicator built around Smart Money Concepts (SMC) and ICT-style dealing ranges. It combines multi-session Fibonacci anchors, confluence-derived SuperFib zones, structure confirmation, and execution filters to identify cleaner premium/discount setups.
 
-- **Session Fib Engine (F1/F2/F3):** Tracks multiple session ranges (daily/weekly/monthly/yearly depending on chart context).
-- **SuperFib Zones:** Builds weighted confluence anchors and renders a full ladder of SF levels.
-- **BOS/MSS Structure Logic:** Marks regime and structure transitions.
+Key components:
+
+- **Session Fib Engine (F1/F2/F3):** Tracks multiple session ranges (daily/weekly/monthly/yearly depending on chart timeframe).
+- **SuperFib Zones:** Builds weighted confluence anchors from F1/F2/F3 and renders a full ladder of SF levels with star ratings.
+- **Staged Liquidity Sweep Engine:** Two-stage candidate → confirm pipeline. Price must raid a ranked liquidity pool and reclaim within a configurable window. Expiry on acceptance (2+ closes beyond raided level).
+- **Post-Sweep MSS Confirmation:** MSS only fires after a confirmed sweep, within a configurable bar window, with a multi-factor displacement gate (body ratio, ATR range, FVG, extension past breached swing).
+- **Entry Fib (EF) Layer:** Narrative-anchored execution fib with OTE zone, proximity filtering, and pre-trigger labels. Distinguishes narrative (sweep+MSS) anchoring from HTF year-fallback.
+- **BOS/MSS Structure Logic:** Marks regime and structure transitions with configurable labels.
 - **Compression Guard:** Filters out low-quality fib construction during chop/compression.
-- **Entry Fib (EF) Layer:** Provides proximity-aware entry context.
-- **ICT Hybrid Engine:** Adds additional directional/context scoring and table output.
-- **Signal Lifecycle Controls:** Includes validity windows, RR checks, and optional alert payload support.
+- **ICT Dashboard:** Real-time table showing structure, HTF PDA, bias, pressure, OTE zone, score, sweep state, displacement quality, EF source, sequence status, and signal lifecycle.
+- **Signal Lifecycle Controls:** Validity windows, RR checks, SL/TP references, and optional alert/webhook payload support.
+- **Kill Zones and Period Lines:** Optional session shading and vertical period markers.
 
 ---
 
-## Core architecture (v10.12+)
+## Architecture (v10.14.0)
 
-The SuperFib engine is organized into three stages:
+The indicator is organized around four core engines:
 
-1. **Anchor Engine**
-   Uses confluence across F1/F2/F3 to produce one weighted SF high/low anchor (requires at least 2 valid fibs).
+### 1. Session Fib Engine (F1/F2/F3)
+Computes three session-anchored Fibonacci ranges from daily, weekly, monthly, or yearly sessions (auto-detected or manually overridden). Each fib tracks high/low/direction independently.
 
-2. **Ladder Engine**
-   Iterates all configured fib ratios unconditionally to render the full canonical SF ladder whenever SF is valid.
+### 2. SuperFib Confluence + Ladder + Star Engine (3-stage)
+- **Anchor Engine:** Confluence across F1/F2/F3 builds one weighted-average SF high/low anchor (requires >= 2 valid fibs).
+- **Ladder Engine:** Full canonical SF ladder iterates every level in fib_ratios unconditionally when SF is valid.
+- **Star Engine:** Stars assigned by distance from equilibrium (50%) via EDE tier. Monotonic enforcement via running-max per side. Color tier capped by anchor quality.
 
-3. **Star Engine**
-   Assigns star tiers by distance from equilibrium (50%), then enforces monotonic progression and clamps output.
+### 3. Staged Sweep + MSS Engine (v10.14.0)
+- **Stage A (Candidate):** Fires when price raids a ranked liquidity pool (EQH/EQL > PDH/PDL > PWH/PWL > swing).
+- **Stage B (Confirm):** Confirmed when price reclaims within `sweep_confirm_bars`. Expired if 2+ closes accept beyond the raided level.
+- **MSS Gate:** After confirmed sweep, MSS must fire within `mss_confirm_bars`. Displacement gate scores body ratio, ATR range, FVG presence, and extension past the breached swing. Requires score >= 2 when `require_disp_mss` is enabled.
 
-In v10.12.1, drawing is render-only and consumes final star values directly (no recalculation inside draw functions).
+### 4. Entry Fib (EF) Engine
+Anchors execution fibs from sweep+MSS narrative legs. Falls back to current-year high/low when no valid leg is available (disabled on 1H and below by default via `ef_ltf_no_fallback`). Dashboard exposes whether EF is narrative-anchored or HTF-fallback.
 
 ---
 
 ## Inputs and controls
 
-The script exposes grouped settings (hidden in TradingView input display metadata) covering:
+The script exposes grouped settings covering:
 
-- **Display** (labels, zones, arrows, kill zones, period lines, density)
-- **Fib visibility** (F1/F2/F3, SuperFib, ICT fib, EF)
-- **Engine tuning** (tolerance, swing lookback, BOS thresholds, min SF range)
-- **Compression guard** (minimum swing range and displacement body%)
-- **Manual fib overrides**
-- **EF settings** (colors, proximity, rolling anchors, pre-trigger behavior)
-- **SL/TP display**
-- **ICT hybrid settings**
-- **Execution filter and signal lifecycle**
+- **Display** — labels, zones, arrows, kill zones, period lines, chart density
+- **Fib Visibility** — F1/F2/F3, SuperFib, EF toggles
+- **Engine** — SF tolerance, swing lookback, BOS thresholds, min SF range, plus v10.14.0 additions:
+  - `sweep_confirm_bars` — reclaim window for staged sweep confirmation (default 2, max 5)
+  - `mss_confirm_bars` — MSS window after confirmed sweep (default 5, max 12)
+  - `require_disp_mss` — require displacement score >= 2 for MSS (default true)
+  - `ef_ltf_no_fallback` — disable EF year-fallback on 1H and below (default true)
+- **Compression Guard** — minimum swing range and displacement body%
+- **Manual Fib Overrides** — override F1/F2/F3 high/low manually
+- **EF Settings** — colors, proximity, freshness, pre-trigger behavior, fallback toggle
+- **SL/TP Display** — SL/TP lines on signals, buffer, style
+- **ICT Hybrid Engine** — structure lookback, proximity filter, bias gate, ATR multiplier
+- **Signal Lifecycle** — validity window, RR threshold, alerts, webhooks
 
 ---
 
-## Installation (TradingView)
+## Installation
 
 1. Open **TradingView**.
 2. Go to **Pine Editor**.
@@ -71,13 +85,15 @@ The script exposes grouped settings (hidden in TradingView input display metadat
 - This is a **technical-analysis tool**, not financial advice.
 - Signals can repaint intrabar depending on your alert/confirmation settings; prefer close-confirmed workflows when needed.
 - Tune pip and threshold values per instrument class (e.g., USD vs JPY pairs).
+- On 1H and below, EF year-fallback is disabled by default. Enable via setting "Disable year-fallback EF on 1H and below" to false if needed.
+- Sweep state and MSS state are visible in the ICT dashboard table (rows: SWEEP STATE, DISPLACEMENT, EF SOURCE).
 - Backtest and forward-test before live deployment.
 
 ---
 
 ## Repository contents
 
-- `SMC-SuperFib-Indicator-v-10.10.txt` — full Pine Script source (currently v10.12.1).
+- `SMC-SuperFib-Indicator-v-10.10.txt` — full Pine Script v6 source (v10.14.0 Final Base).
 - `README.md` — project documentation.
 
 ---
