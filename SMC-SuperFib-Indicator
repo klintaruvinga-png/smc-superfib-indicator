@@ -1811,26 +1811,27 @@ get_sl_from_sweep(direction, is_sweep_up, is_sweep_down, swing_hi, swing_lo) =>
     sl
 
 get_tp_price_from_zone(zone_price, direction) =>
-    // v10.15.0 FIX B: TP must be directionally valid AND on the correct
-    // side of the EF anchor. For SELL: TP must be BELOW zone_price AND
-    // below ef_anchor_low (true extension target, not a misaligned level).
-    // For BUY: TP must be ABOVE zone_price AND above ef_anchor_high.
-    // This prevents fallback-anchored EF extensions from producing
-    // cross-directional TPs.
+    // v10.15.0 FIX B (corrected): TP extensions are directionally validated.
+    // For SELL: TP must be below the entry zone. ef_lm1/ef_lm2 on a bear EF
+    //           are already below ef_0 (the swing high) by construction.
+    //           Guard: TP must be below zone_price (no upside TPs on sells).
+    // For BUY:  TP must be above the entry zone. ef_lm1/ef_lm2 on a bull EF
+    //           are already above ef_100 (the impulse high) by construction.
+    //           Guard: TP must be above zone_price (no downside TPs on buys).
+    // The ef_anchor_high/low bounds are intentionally NOT used here because
+    // ef_lm1/ef_lm2 are extensions BEYOND the anchor by definition — adding
+    // the anchor as a ceiling/floor double-gates incorrectly and suppresses
+    // valid targets.
     float tp = na
     if direction == "SELL"
-        // Valid sell TP: below entry zone AND below the EF 0% (swing low anchor)
-        _tp_ceiling = not na(ef_anchor_low) ? math.min(zone_price, ef_anchor_low) : zone_price
-        if not na(ef_lm1) and ef_lm1 < _tp_ceiling
+        if not na(ef_lm1) and ef_lm1 < zone_price
             tp := ef_lm1
-        else if not na(ef_lm2) and ef_lm2 < _tp_ceiling
+        else if not na(ef_lm2) and ef_lm2 < zone_price
             tp := ef_lm2
     else
-        // Valid buy TP: above entry zone AND above the EF 0% (swing high anchor)
-        _tp_floor = not na(ef_anchor_high) ? math.max(zone_price, ef_anchor_high) : zone_price
-        if not na(ef_lm1) and ef_lm1 > _tp_floor
+        if not na(ef_lm1) and ef_lm1 > zone_price
             tp := ef_lm1
-        else if not na(ef_lm2) and ef_lm2 > _tp_floor
+        else if not na(ef_lm2) and ef_lm2 > zone_price
             tp := ef_lm2
     tp
 
