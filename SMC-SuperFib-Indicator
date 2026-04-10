@@ -1,5 +1,5 @@
 //@version=6
-indicator("SMC SuperFib v10.15.0 Final Base – ICT Stabilization Patch", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500, max_bars_back=5000)
+indicator("SMC SuperFib v10.15.1 Final Base – ICT Stabilization Patch", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500, max_bars_back=5000)
 
 // ═══════════════════════════════════════════════════════════════════
 // SMC SuperFib v10.14.0 Final Base — ICT Stabilization Patch
@@ -15,6 +15,16 @@ indicator("SMC SuperFib v10.15.0 Final Base – ICT Stabilization Patch", overla
 //            Makes directional context immediately readable on chart.
 //   FIX D — Dashboard EF SOURCE row now appends ▲/▼ direction indicator.
 //            Allows instant visual check of EF/structure alignment.
+//
+// v10.15.1 CHANGES (over v10.15.0):
+//   FIX E — EF TP extension lines and labels (TP1/TP2/TP3) now gated behind
+//            narrative validation flag (ef_is_narrative) or an active ladder
+//            in the matching direction. In HTF fallback mode, EF OTE zone and
+//            equilibrium levels still render for reference, but extension TPs
+//            are suppressed until a sweep+MSS sequence validates the direction.
+//            Also gates the SL reference line on the same condition.
+//            Fixes: sell-side TP labels rendering on chart when EF is in
+//            HTF fallback bearish mode with no confirmed execution narrative.
 //
 // v10.13.0 CHANGES (over v10.12.1):
 //   FIX 1 — Arrow direction: fib arrows now reflect actual measured
@@ -1733,6 +1743,15 @@ draw_ef_dotted_t(x_t) =>
         _lvl79   = ef_l079
         _lvl100  = ef_l100
         _sl_ref  = ef_is_bull ? ef_anchor_low : ef_anchor_high
+        // v10.15.1: EF TP lines only draw when direction is narrative-validated.
+        // In HTF fallback mode, extensions are suppressed — the fallback EF
+        // provides reference levels (OTE zone, equilibrium) but does not
+        // constitute a live execution map for TP projection.
+        // Gate: narrative anchor OR active ladder in same direction.
+        _ef_tp_draw_ok = ef_is_narrative or
+             (state == "ACTIVE" and
+              ((ladder_direction == "BUY"  and ef_anchor_dir == 1) or
+               (ladder_direction == "SELL" and ef_anchor_dir == -1)))
         draw_hline_t(x_t, _lvl0,   ef_col_prem, 2, line.style_solid)
         draw_hline_t(x_t, _lvl50,  color.new(color.gray,35), 1, line.style_dotted)
         draw_hline_t(x_t, _lvl62,  ef_col_chop, 1, line.style_solid)
@@ -1741,13 +1760,16 @@ draw_ef_dotted_t(x_t) =>
         draw_hline_t(x_t, _lvl100, ef_col_disc, 2, line.style_solid)
         if show_ef_ote_zone
             box.new(x_t - _back_extension, ef_ote_hi, x_t, ef_ote_lo, xloc=xloc.bar_time, border_color=C_ICT_OTE, bgcolor=color.new(C_ICT_OTE,85), border_width=2)
-        if show_ef_targets and show_ext
+        if show_ef_targets and show_ext and _ef_tp_draw_ok
             draw_hline_t(x_t, ef_lm1,  C_TP_LINE, 1, line.style_dashed)
             draw_hline_t(x_t, ef_lm2,  C_TP_LINE, 1, line.style_dashed)
             if _den_full
                 draw_hline_t(x_t, ef_lm25, C_TP_LINE, 1, line.style_dotted)
                 draw_hline_t(x_t, ef_lm4,  C_TP_LINE, 1, line.style_dotted)
-        if show_ef_sltp
+        // v10.15.1: SL reference line shares narrative gate.
+        // In fallback mode with no validated direction, the SL ref
+        // line is not meaningful and adds visual noise.
+        if show_ef_sltp and _ef_tp_draw_ok
             draw_hline_t(x_t, _sl_ref, C_SL_LINE, 1, line.style_dotted)
         sz_ef = ef_lbl_size == "tiny" ? size.tiny : ef_lbl_size == "large" ? size.large : ef_lbl_size == "normal" ? size.normal : size.small
         if show_labels and show_ef_labels
@@ -1762,7 +1784,9 @@ draw_ef_dotted_t(x_t) =>
             label.new(x_t + f_label_pad_ms(), _lvl705, "EF 70.5 — Sweet Spot" + _ote_dir_tag + " @ " + str.tostring(_lvl705, format.mintick), xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.black,75), textcolor=C_ICT_OTE, size=sz_ef)
             label.new(x_t + f_label_pad_ms(), _lvl79,  "EF 79 — OTE End" + _ote_dir_tag + " @ " + str.tostring(_lvl79, format.mintick), xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white,100), textcolor=ef_col_disc, size=sz_ef)
             label.new(x_t + f_label_pad_ms(), _lvl100, _t100 + " @ " + str.tostring(_lvl100, format.mintick), xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white,100), textcolor=ef_col_disc, size=sz_ef)
-            if show_ef_targets and show_ext
+            // v10.15.1: TP labels share the same narrative gate as TP lines.
+            // _ef_tp_draw_ok is already evaluated above in this function scope.
+            if show_ef_targets and show_ext and _ef_tp_draw_ok
                 label.new(x_t + f_label_pad_ms(), ef_lm1, "TP1 — -1 @ " + str.tostring(ef_lm1, format.mintick), xloc=xloc.bar_time, style=label.style_label_left, color=color.new(C_TP_LINE,85), textcolor=color.white, size=sz_ef)
                 label.new(x_t + f_label_pad_ms(), ef_lm2, "TP2 — -2 @ " + str.tostring(ef_lm2, format.mintick), xloc=xloc.bar_time, style=label.style_label_left, color=color.new(C_TP_LINE,85), textcolor=color.white, size=sz_ef)
                 if _den_full
@@ -2214,7 +2238,7 @@ if ict_enabled and show_ict_table and not _tbl_init
                  bgcolor=C_TBL_BG_DATA, border_color=C_TBL_BORDER,
                  border_width=1, frame_color=C_TBL_BORDER, frame_width=1)
     table.cell(hm_tbl, 0,  0, "SMC SuperFIB",  text_color=C_TBL_HEAD_TXT,        text_size=size.small, bgcolor=C_TBL_BG_HEAD)
-    table.cell(hm_tbl, 1,  0, "v10.15.0 EF Fix",text_color=color.new(#00FFFF,40), text_size=size.tiny,  bgcolor=C_TBL_BG_HEAD)
+    table.cell(hm_tbl, 1,  0, "v10.15.1 TP Gate",text_color=color.new(#00FFFF,40), text_size=size.tiny,  bgcolor=C_TBL_BG_HEAD)
     table.cell(hm_tbl, 0,  1, "STRUCTURE",      text_color=C_TBL_LBL, text_size=size.tiny, bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 0,  2, "HTF PDA",        text_color=C_TBL_LBL, text_size=size.tiny, bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 0,  3, "BIAS",           text_color=C_TBL_LBL, text_size=size.tiny, bgcolor=C_TBL_BG_DATA)
