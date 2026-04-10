@@ -1914,7 +1914,7 @@ spread_val() =>
 
 // ── PER-BAR SCORE CACHE ────────────────────────────────────────────
 // Computed once, reused in signal block, EF pretrig, and opposing check
-_need_star_cache = show_signals or (show_ef_pretrig and ef_pretrig_filter)
+_need_star_cache = show_signals or ef_pretrig_filter
 _cached_pz  = _need_star_cache ? cur_price_zone()               : 0
 _cached_bst = _need_star_cache ? base_stars_at_close()          : 0
 _cached_dbo = _need_star_cache ? depth_bonus_at_close(_cached_pz) : 0
@@ -2306,6 +2306,11 @@ var float _last_f3l = na
 var float _last_efh = na
 var float _last_efl = na
 var bool  _last_allowFib = false
+var int   _last_t1  = na
+var int   _last_t2  = na
+var int   _last_t3  = na
+var int   _last_t4  = na
+var int   _last_t5  = na
 
 _anchors_changed = barstate.islast and (
     nz(f1_high) != nz(_last_f1h) or nz(f1_low)  != nz(_last_f1l) or
@@ -2313,7 +2318,10 @@ _anchors_changed = barstate.islast and (
     nz(f3_high) != nz(_last_f3h) or nz(f3_low)  != nz(_last_f3l) or
     nz(ef_anchor_high) != nz(_last_efh) or
     nz(ef_anchor_low)  != nz(_last_efl) or
-    allowFib != _last_allowFib)
+    allowFib != _last_allowFib or
+    nz(_t1) != nz(_last_t1) or nz(_t2) != nz(_last_t2) or
+    nz(_t3) != nz(_last_t3) or nz(_t4) != nz(_last_t4) or
+    nz(_t5) != nz(_last_t5))
 
 if _anchors_changed
     // FIX 6: Delete all previous fib objects before redraw
@@ -2473,6 +2481,11 @@ if _anchors_changed
     _last_efh      := nz(ef_anchor_high)
     _last_efl      := nz(ef_anchor_low)
     _last_allowFib := allowFib
+    _last_t1       := nz(_t1)
+    _last_t2       := nz(_t2)
+    _last_t3       := nz(_t3)
+    _last_t4       := nz(_t4)
+    _last_t5       := nz(_t5)
 
 // ═══════════════════════════════════════════════════════════════════
 // ALERTS
