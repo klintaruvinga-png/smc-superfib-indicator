@@ -789,12 +789,8 @@ alert_bar_ready = not alert_confirmed_only or barstate.isconfirmed
 
 // ── STAGED SWEEP LOGIC v10.14.0 ────────────────────────────────────
 // Reference liquidity levels — prefer ranked pool over raw swing
-_liq_high_ref = eqh_active and not na(eqh_price) ? eqh_price :
-                not na(pdh) ? pdh :
-                not na(pwh) ? pwh : last_swing_high
-_liq_low_ref  = eql_active and not na(eql_price) ? eql_price :
-                not na(pdl) ? pdl :
-                not na(pwl) ? pwl : last_swing_low
+_liq_high_ref = eqh_active and not na(eqh_price) ? eqh_price : (not na(pdh) ? pdh : (not na(pwh) ? pwh : last_swing_high))
+_liq_low_ref  = eql_active and not na(eql_price) ? eql_price : (not na(pdl) ? pdl : (not na(pwl) ? pwl : last_swing_low))
 
 // Reset single-bar event booleans each bar
 sweep_up             := false
