@@ -1,5 +1,5 @@
 //@version=6
-indicator("SMC SuperFib v10.13.0 – ICT Alignment Patch", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500, max_bars_back=5000)
+indicator("SMC SuperFib v10.14.0 – Staged Sweep + MSS", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500, max_bars_back=5000)
 
 // ═══════════════════════════════════════════════════════════════════
 // SMC SuperFib v10.13.0 — ICT Alignment Patch
@@ -141,6 +141,10 @@ sf_min_pips_usd   = input.float(15.0, "SF min range pips (USD)",    minval=5.0, 
 sf_min_pips_jpy   = input.float(30.0, "SF min range pips (JPY)",    minval=5.0, maxval=500.0, step=5.0, group=GN, display=display.none)
 htf_tf            = input.string("D", "HTF confluence timeframe",   options=["60","240","D","W"],       group=GN, display=display.none)
 anchor_bars       = input.int(50, "SL/TP right anchor (bars)", minval=10, maxval=500, group=GN, display=display.none)
+sweep_confirm_bars = input.int(2,    "Sweep reclaim window (bars)",          minval=1, maxval=5,  group=GN, display=display.none)
+mss_confirm_bars   = input.int(5,    "MSS confirm window after sweep (bars)", minval=2, maxval=12, group=GN, display=display.none)
+require_disp_mss   = input.bool(true,"Require displacement for MSS",          group=GN, display=display.none)
+ef_ltf_no_fallback = input.bool(true,"Disable year-fallback EF on 1H and below", group=GN, display=display.none)
 
 // ── INPUTS — Compression Guard (v10.10) ───────────────────────────
 var GCG = "Compression Guard"
@@ -741,11 +745,27 @@ pdl = request.security(syminfo.tickerid, "D", low[1],  lookahead=barmerge.lookah
 pwh = request.security(syminfo.tickerid, "W", high[1], lookahead=barmerge.lookahead_off)
 pwl = request.security(syminfo.tickerid, "W", low[1],  lookahead=barmerge.lookahead_off)
 
-// ── LIQUIDITY SWEEP ENGINE ─────────────────────────────────────────
-var bool  sweep_up        = false
-var bool  sweep_down      = false
-var float last_swing_high = na
-var float last_swing_low  = na
+// ── LIQUIDITY SWEEP ENGINE v10.14.0 — STAGED CANDIDATE + CONFIRM ──
+// Stage A: candidate fires when price raids a liquidity pool
+// Stage B: confirmed only when price reclaims within sweep_confirm_bars
+// Failure: if price accepts (2+ closes beyond raided level) → expire
+
+var bool  sweep_up                 = false
+var bool  sweep_down               = false
+var float last_swing_high          = na
+var float last_swing_low           = na
+
+// Candidate state
+var int   swp_cand_dir             = 0       // 1 = bear raid, -1 = bull raid
+var float swp_cand_price           = na      // raided liquidity level
+var int   swp_cand_bar             = na      // bar index when candidate was set
+var int   swp_accept_count         = 0       // consecutive closes beyond raided level
+
+// Confirmed sweep — single-bar event booleans + persistent last direction
+var bool  confirmed_sweep_up       = false
+var bool  confirmed_sweep_down     = false
+var int   confirmed_sweep_bar      = na
+var int   last_confirmed_sweep_dir = 0       // 1 = last sweep UP, -1 = last sweep DOWN
 
 // ── REGIME DETECTION ───────────────────────────────────────────────
 ph = ta.pivothigh(high, swing_lookback, swing_lookback)
@@ -766,18 +786,89 @@ if not na(pl)
 last_swing_high := nz(last_ph1, high)
 last_swing_low  := nz(last_pl1, low)
 alert_bar_ready = not alert_confirmed_only or barstate.isconfirmed
-sweep_up        := alert_bar_ready and high > last_swing_high and close < last_swing_high
-sweep_down      := alert_bar_ready and low  < last_swing_low  and close > last_swing_low
 
-// PATCH 1: sweep_bar tracks bar index of most recent sweep
+// ── STAGED SWEEP LOGIC v10.14.0 ────────────────────────────────────
+// Reference liquidity levels — prefer ranked pool over raw swing
+_liq_high_ref = eqh_active and not na(eqh_price) ? eqh_price :
+                not na(pdh) ? pdh :
+                not na(pwh) ? pwh : last_swing_high
+_liq_low_ref  = eql_active and not na(eql_price) ? eql_price :
+                not na(pdl) ? pdl :
+                not na(pwl) ? pwl : last_swing_low
+
+// Reset single-bar event booleans each bar
+sweep_up             := false
+sweep_down           := false
+confirmed_sweep_up   := false
+confirmed_sweep_down := false
+
+if alert_bar_ready
+    // ── CANDIDATE EXPIRY: acceptance failure invalidation ───────────
+    if swp_cand_dir == 1
+        swp_accept_count := close > swp_cand_price ? swp_accept_count + 1 : 0
+    else if swp_cand_dir == -1
+        swp_accept_count := close < swp_cand_price ? swp_accept_count + 1 : 0
+    else
+        swp_accept_count := 0
+
+    bool _cand_expired = false
+    if swp_cand_dir != 0
+        if swp_accept_count >= 2
+            _cand_expired := true
+        if not na(swp_cand_bar) and (bar_index - swp_cand_bar) > (sweep_confirm_bars + 1)
+            _cand_expired := true
+    if _cand_expired
+        swp_cand_dir     := 0
+        swp_cand_price   := na
+        swp_cand_bar     := na
+        swp_accept_count := 0
+
+    // ── STAGE A: SET CANDIDATE ──────────────────────────────────────
+    // Bear raid: price pokes above liquidity high
+    if swp_cand_dir == 0 and high > _liq_high_ref
+        swp_cand_dir     := 1
+        swp_cand_price   := _liq_high_ref
+        swp_cand_bar     := bar_index
+        swp_accept_count := 0
+
+    // Bull raid: price pokes below liquidity low
+    if swp_cand_dir == 0 and low < _liq_low_ref
+        swp_cand_dir     := -1
+        swp_cand_price   := _liq_low_ref
+        swp_cand_bar     := bar_index
+        swp_accept_count := 0
+
+    // ── STAGE B: CONFIRM SWEEP ──────────────────────────────────────
+    // Bear raid confirmed: closed back below the raided level
+    if swp_cand_dir == 1 and not na(swp_cand_bar)
+        if (bar_index - swp_cand_bar) <= sweep_confirm_bars and close < swp_cand_price
+            confirmed_sweep_up        := true
+            confirmed_sweep_bar       := bar_index
+            last_confirmed_sweep_dir  := 1
+            sweep_up                  := true
+            swp_cand_dir              := 0
+            swp_cand_price            := na
+            swp_cand_bar              := na
+            swp_accept_count          := 0
+
+    // Bull raid confirmed: closed back above the raided level
+    if swp_cand_dir == -1 and not na(swp_cand_bar)
+        if (bar_index - swp_cand_bar) <= sweep_confirm_bars and close > swp_cand_price
+            confirmed_sweep_down      := true
+            confirmed_sweep_bar       := bar_index
+            last_confirmed_sweep_dir  := -1
+            sweep_down                := true
+            swp_cand_dir              := 0
+            swp_cand_price            := na
+            swp_cand_bar              := na
+            swp_accept_count          := 0
+
+// v10.14.0: sweep_bar / mss_bar driven by staged confirmed sweep outputs
 var int sweep_bar = na
-// PATCH I: Reset mss_bar on fresh sweep so MSS must follow this sweep
-var int mss_bar = na
+var int mss_bar   = na
 
-// PATCH 1 & I: capture bar index and clear stale MSS on sweep
 if sweep_up or sweep_down
     sweep_bar := bar_index
-    // Clear mss_bar so a new MSS must be formed after this sweep
     mss_bar   := na
 
 bos_thresh = pip_type == "JPY" ? bos_min_pips_jpy * 0.01 : bos_min_pips_usd * 0.0001
@@ -796,7 +887,6 @@ var int regime              = 0
 var int prev_regime         = 0
 var int last_drawn_regime   = -99
 var int trend_confirmed_bar = na
-// var int mss_bar             = na  // moved up
 var string sequence_status  = "AWAIT SWEEP"
 if is_hh and is_hl
     prev_regime         := regime
@@ -821,14 +911,88 @@ else if not is_hh and not is_hl and not is_ll and not is_lh
         prev_regime := regime
         regime      := 0
 
-// ── MSS ENGINE ─────────────────────────────────────────────────────
-var bool mss_bullish = false
-var bool mss_bearish = false
-mss_bullish := sweep_down and (high > nz(last_ph1, high))
-mss_bearish := sweep_up   and (low  < nz(last_pl1, low))
-
 // EF anchor selection must run after sweep/regime/MSS state is computed.
 ef_atr_now = ta.atr(14)
+
+// ── MSS ENGINE v10.14.0 — POST-SWEEP STAGED CONFIRMATION ───────────
+// MSS only evaluates after a confirmed sweep within mss_confirm_bars.
+// Requires: confirmed sweep → internal swing break → displacement gate.
+
+var bool mss_bullish = false
+var bool mss_bearish = false
+
+// Persistent MSS window tracking
+var int  _mss_sweep_bar           = na
+var int  _mss_sweep_dir           = 0    // 1 = watching for bearish MSS, -1 = bullish MSS
+
+// Persistent last-confirmed MSS state for diagnostics
+var int  last_confirmed_mss_dir   = 0
+var bool last_disp_ok_bull        = false
+var bool last_disp_ok_bear        = false
+
+// Capture confirmed sweep to open MSS window
+if confirmed_sweep_up
+    _mss_sweep_bar := bar_index
+    _mss_sweep_dir := 1
+if confirmed_sweep_down
+    _mss_sweep_bar := bar_index
+    _mss_sweep_dir := -1
+
+// Displacement scoring at current bar
+_disp_body_ratio  = math.abs(close - open) / math.max(high - low, syminfo.mintick)
+_disp_range_atr   = ef_atr_now > 0 ? (high - low) / ef_atr_now : 0.0
+_disp_fvg_bull    = low > high[2]
+_disp_fvg_bear    = high < low[2]
+_disp_extend_bull = not na(last_pl1) ? (close - last_pl1) >= ef_atr_now * 0.2 : false
+_disp_extend_bear = not na(last_ph1) ? (last_ph1 - close) >= ef_atr_now * 0.2 : false
+
+_disp_score_bull = (_disp_body_ratio >= 0.55 ? 1 : 0) +
+                   (_disp_range_atr   >= 1.30 ? 1 : 0) +
+                   (_disp_fvg_bull             ? 1 : 0) +
+                   (_disp_extend_bull           ? 1 : 0)
+_disp_score_bear = (_disp_body_ratio >= 0.55 ? 1 : 0) +
+                   (_disp_range_atr   >= 1.30 ? 1 : 0) +
+                   (_disp_fvg_bear             ? 1 : 0) +
+                   (_disp_extend_bear           ? 1 : 0)
+
+_displacement_ok_bull = _disp_score_bull >= 2
+_displacement_ok_bear = _disp_score_bear >= 2
+
+// Reset single-bar MSS booleans each bar
+mss_bullish := false
+mss_bearish := false
+
+if not na(_mss_sweep_bar) and alert_bar_ready
+    if (bar_index - _mss_sweep_bar) <= mss_confirm_bars
+        // Bullish MSS: after confirmed_sweep_down, break above last swing high
+        if _mss_sweep_dir == -1 and not na(last_ph1) and high > last_ph1
+            bool _disp_ok = require_disp_mss ? _displacement_ok_bull : true
+            if _disp_ok
+                mss_bullish            := true
+                last_confirmed_mss_dir := 1
+                last_disp_ok_bull      := _displacement_ok_bull
+                last_disp_ok_bear      := false
+                _mss_sweep_bar         := na
+                _mss_sweep_dir         := 0
+
+        // Bearish MSS: after confirmed_sweep_up, break below last swing low
+        if _mss_sweep_dir == 1 and not na(last_pl1) and low < last_pl1
+            bool _disp_ok = require_disp_mss ? _displacement_ok_bear : true
+            if _disp_ok
+                mss_bearish            := true
+                last_confirmed_mss_dir := -1
+                last_disp_ok_bear      := _displacement_ok_bear
+                last_disp_ok_bull      := false
+                _mss_sweep_bar         := na
+                _mss_sweep_dir         := 0
+    else
+        // MSS window expired — clear
+        _mss_sweep_bar := na
+        _mss_sweep_dir := 0
+
+// v10.14.0: Update mss_bar after MSS engine (constraint #6)
+if mss_bullish or mss_bearish
+    mss_bar := bar_index
 ef_leg_min = ef_min_range_pips * pip_mult
 
 // Candidate execution legs must be impulse + MSS + sweep context
@@ -859,7 +1023,9 @@ var bool ef_is_narrative = false
 if bull_leg_valid or bear_leg_valid
     ef_is_narrative := true
 
-if ef_fallback_year and (na(ef_anchor_low) or na(ef_anchor_high) or (bar_index - nz(ef_anchor_bar, bar_index)) > ef_fresh_bars)
+_ltf_bars         = tf_secs <= 3600
+_fallback_allowed = ef_fallback_year and (not (_ltf_bars and ef_ltf_no_fallback))
+if _fallback_allowed and (na(ef_anchor_low) or na(ef_anchor_high) or (bar_index - nz(ef_anchor_bar, bar_index)) > ef_fresh_bars)
     if not na(ef_curr_year_high) and not na(ef_curr_year_low)
         ef_anchor_low  := ef_curr_year_low
         ef_anchor_high := ef_curr_year_high
@@ -2046,7 +2212,7 @@ var table hm_tbl = na
 if ict_enabled and show_ict_table and barstate.islast
     if not na(hm_tbl)
         table.delete(hm_tbl)
-    hm_tbl := table.new(position.top_right, 2, 13,
+    hm_tbl := table.new(position.top_right, 2, 16,
                          bgcolor=C_TBL_BG_DATA,
                          border_color=C_TBL_BORDER, border_width=1,
                          frame_color=C_TBL_BORDER,  frame_width=1)
@@ -2067,7 +2233,7 @@ if ict_enabled and show_ict_table and barstate.islast
     stage_col   = state == "ACTIVE" ? C_TBL_BULL : C_TBL_NEUTRAL
 
     table.cell(hm_tbl, 0,  0, "SMC SuperFIB",         text_color=C_TBL_HEAD_TXT,        text_size=size.small, bgcolor=C_TBL_BG_HEAD)
-    table.cell(hm_tbl, 1,  0, "v10.13.0",            text_color=color.new(#00FFFF,40), text_size=size.tiny,  bgcolor=C_TBL_BG_HEAD)
+    table.cell(hm_tbl, 1,  0, "v10.14.0",            text_color=color.new(#00FFFF,40), text_size=size.tiny,  bgcolor=C_TBL_BG_HEAD)
     table.cell(hm_tbl, 0,  1, "STRUCTURE",          text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 1,  1, struct_str,           text_color=struct_col,            text_size=size.small, bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 0,  2, "HTF PDA",            text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
@@ -2094,6 +2260,38 @@ if ict_enabled and show_ict_table and barstate.islast
     seq_col = seq_str == "READY" ? C_TBL_BULL : seq_str == "AWAIT MSS" ? color.new(#F5A623,0) : C_TBL_BEAR
     table.cell(hm_tbl, 0, 12, "SEQUENCE",           text_color=C_TBL_LBL,            text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 1, 12, seq_str,              text_color=seq_col,              text_size=size.small, bgcolor=C_TBL_BG_DATA)
+
+    // ── Row 13: SWEEP STATE ─────────────────────────────────────────
+    _swp_state_str = swp_cand_dir == 1    ? "CAND UP"      :
+                     swp_cand_dir == -1   ? "CAND DOWN"    :
+                     sweep_up             ? "CONF UP ✓"    :
+                     sweep_down           ? "CONF DOWN ✓"  :
+                     last_confirmed_sweep_dir == 1  ? "LAST: UP"   :
+                     last_confirmed_sweep_dir == -1 ? "LAST: DOWN" : "NONE"
+    _swp_state_col = sweep_up or sweep_down        ? C_TBL_BULL :
+                     swp_cand_dir != 0             ? color.new(#F5A623, 0) :
+                     last_confirmed_sweep_dir != 0 ? C_TBL_NEUTRAL : C_TBL_BEAR
+    table.cell(hm_tbl, 0, 13, "SWEEP STATE",  text_color=C_TBL_LBL,       text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 1, 13, _swp_state_str, text_color=_swp_state_col,  text_size=size.small, bgcolor=C_TBL_BG_DATA)
+
+    // ── Row 14: DISPLACEMENT ────────────────────────────────────────
+    _disp_str = mss_bullish ? (_displacement_ok_bull ? "PASS ▲" : "WEAK ▲") :
+                mss_bearish ? (_displacement_ok_bear ? "PASS ▼" : "WEAK ▼") :
+                last_confirmed_mss_dir == 1  ? (last_disp_ok_bull ? "LAST: PASS ▲" : "LAST: WEAK ▲") :
+                last_confirmed_mss_dir == -1 ? (last_disp_ok_bear ? "LAST: PASS ▼" : "LAST: WEAK ▼") : "—"
+    _disp_col = (mss_bullish and _displacement_ok_bull) or (mss_bearish and _displacement_ok_bear) ? C_TBL_BULL :
+                (mss_bullish or mss_bearish)             ? color.new(#F5A623, 0) :
+                last_confirmed_mss_dir != 0              ? C_TBL_NEUTRAL : C_TBL_BEAR
+    table.cell(hm_tbl, 0, 14, "DISPLACEMENT", text_color=C_TBL_LBL,  text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 1, 14, _disp_str,      text_color=_disp_col,  text_size=size.small, bgcolor=C_TBL_BG_DATA)
+
+    // ── Row 15: EF SOURCE ───────────────────────────────────────────
+    _ef_src_str = ef_is_narrative       ? "NARRATIVE ✓"  :
+                  not na(ef_anchor_low) ? "HTF_FALLBACK" : "NONE"
+    _ef_src_col = ef_is_narrative       ? C_TBL_BULL :
+                  not na(ef_anchor_low) ? color.new(#F5A623, 0) : C_TBL_BEAR
+    table.cell(hm_tbl, 0, 15, "EF SOURCE",  text_color=C_TBL_LBL,  text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
+    table.cell(hm_tbl, 1, 15, _ef_src_str, text_color=_ef_src_col, text_size=size.small, bgcolor=C_TBL_BG_DATA)
 
 // ── SF DRAW DEDUPLICATION ─────────────────────────────────────────
 var array<float> _sf_drawn = array.new_float()
