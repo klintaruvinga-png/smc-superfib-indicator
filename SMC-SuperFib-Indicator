@@ -1734,6 +1734,29 @@ draw_fib_t(x_t, hi, lo, is_swap, point_up, lw_base, fib_name) =>
             draw_chop_fill_t(x_t, hi, lo)
         draw_vert_arrow_t(x_t, hi, lo, point_up, arr_col, lw_base)
 
+// ═══════════════════════════════════════════════════════════════════
+// SIGNAL LIFECYCLE STATE MACHINE
+// ═══════════════════════════════════════════════════════════════════
+// NOTE: These globals must be declared before draw_ef_dotted_t(),
+// which reads state/ladder_direction for EF TP and SL gating.
+var string state                  = "INVALID"
+var string ladder_id              = na
+var string ladder_direction       = na
+var array<float> ladder_entries   = array.new_float(3, float(na))
+var float  ladder_sl              = na
+var float  ladder_tp              = na
+var int    signal_bar             = na
+var bool   e1_filled              = false
+var bool   e2_filled              = false
+var bool   e3_filled              = false
+var bool   e1_alert_sent          = false
+var bool   e2_alert_sent          = false
+var bool   e3_alert_sent          = false
+var int    ladder_score_val       = 0
+var string ladder_model           = na
+var float  ladder_zone_price      = na
+var bool   ladder_alert_sent      = false
+
 draw_ef_dotted_t(x_t) =>
     if not na(ef_0) and not na(ef_100) and ef_0 != ef_100
         _lvl0    = ef_l000
@@ -1946,27 +1969,6 @@ grade_setup(setup_q, exec_q, rr_ok, poi_ok, major_ok) =>
      rr_ok and poi_ok and major_ok and setup_q >= 75 ? "A" :
      rr_ok and poi_ok and setup_q >= 60 ? "B" :
      rr_ok and setup_q >= 45 ? "C" : "BLOCKED"
-
-// ═══════════════════════════════════════════════════════════════════
-// SIGNAL LIFECYCLE STATE MACHINE
-// ═══════════════════════════════════════════════════════════════════
-var string state                  = "INVALID"
-var string ladder_id              = na
-var string ladder_direction       = na
-var array<float> ladder_entries   = array.new_float(3, float(na))
-var float  ladder_sl              = na
-var float  ladder_tp              = na
-var int    signal_bar             = na
-var bool   e1_filled              = false
-var bool   e2_filled              = false
-var bool   e3_filled              = false
-var bool   e1_alert_sent          = false
-var bool   e2_alert_sent          = false
-var bool   e3_alert_sent          = false
-var int    ladder_score_val       = 0
-var string ladder_model           = na
-var float  ladder_zone_price      = na
-var bool   ladder_alert_sent      = false
 
 gen_ladder_id(direction) =>
     syminfo.tickerid + "_" + str.tostring(time) + "_" + direction
