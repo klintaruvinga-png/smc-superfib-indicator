@@ -1792,6 +1792,29 @@ draw_ef_dotted_t(x_t) =>
                 if _den_full
                     label.new(x_t + f_label_pad_ms(), ef_lm25, "TP3 — -2.5 @ " + str.tostring(ef_lm25, format.mintick), xloc=xloc.bar_time, style=label.style_label_left, color=color.new(C_TP_LINE,90), textcolor=color.white, size=sz_ef)
 
+// ═══════════════════════════════════════════════════════════════════
+// SIGNAL LIFECYCLE STATE MACHINE
+// ═══════════════════════════════════════════════════════════════════
+// NOTE: These globals are declared here so earlier drawing functions
+// can safely reference them without forward-declaration errors.
+var string state                  = "INVALID"
+var string ladder_id              = na
+var string ladder_direction       = na
+var array<float> ladder_entries   = array.new_float(3, float(na))
+var float  ladder_sl              = na
+var float  ladder_tp              = na
+var int    signal_bar             = na
+var bool   e1_filled              = false
+var bool   e2_filled              = false
+var bool   e3_filled              = false
+var bool   e1_alert_sent          = false
+var bool   e2_alert_sent          = false
+var bool   e3_alert_sent          = false
+var int    ladder_score_val       = 0
+var string ladder_model           = na
+var float  ladder_zone_price      = na
+var bool   ladder_alert_sent      = false
+
 sf_draw_t(p, half, color_tier, sf_stars_final, zone, x_t, key_idx) =>
     is_sell    = zone >= 1
     bc         = is_sell ? (color_tier == 3 ? SF_SELL_3 : color_tier == 2 ? SF_SELL_2 : SF_SELL_1) : (color_tier == 3 ? SF_BUY_3 : color_tier == 2 ? SF_BUY_2 : SF_BUY_1)
@@ -1946,27 +1969,6 @@ grade_setup(setup_q, exec_q, rr_ok, poi_ok, major_ok) =>
      rr_ok and poi_ok and major_ok and setup_q >= 75 ? "A" :
      rr_ok and poi_ok and setup_q >= 60 ? "B" :
      rr_ok and setup_q >= 45 ? "C" : "BLOCKED"
-
-// ═══════════════════════════════════════════════════════════════════
-// SIGNAL LIFECYCLE STATE MACHINE
-// ═══════════════════════════════════════════════════════════════════
-var string state                  = "INVALID"
-var string ladder_id              = na
-var string ladder_direction       = na
-var array<float> ladder_entries   = array.new_float(3, float(na))
-var float  ladder_sl              = na
-var float  ladder_tp              = na
-var int    signal_bar             = na
-var bool   e1_filled              = false
-var bool   e2_filled              = false
-var bool   e3_filled              = false
-var bool   e1_alert_sent          = false
-var bool   e2_alert_sent          = false
-var bool   e3_alert_sent          = false
-var int    ladder_score_val       = 0
-var string ladder_model           = na
-var float  ladder_zone_price      = na
-var bool   ladder_alert_sent      = false
 
 gen_ladder_id(direction) =>
     syminfo.tickerid + "_" + str.tostring(time) + "_" + direction
