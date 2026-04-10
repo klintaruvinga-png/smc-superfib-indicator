@@ -787,6 +787,13 @@ last_swing_high := nz(last_ph1, high)
 last_swing_low  := nz(last_pl1, low)
 alert_bar_ready = not alert_confirmed_only or barstate.isconfirmed
 
+bos_thresh = pip_type == "JPY" ? bos_min_pips_jpy * 0.01 : bos_min_pips_usd * 0.0001
+eq_thresh  = bos_thresh * 0.50
+eqh_active = not na(last_ph1) and not na(last_ph2) and math.abs(last_ph1 - last_ph2) <= eq_thresh
+eql_active = not na(last_pl1) and not na(last_pl2) and math.abs(last_pl1 - last_pl2) <= eq_thresh
+eqh_price  = eqh_active ? math.max(last_ph1, last_ph2) : na
+eql_price  = eql_active ? math.min(last_pl1, last_pl2) : na
+
 // ── STAGED SWEEP LOGIC v10.14.0 ────────────────────────────────────
 // Reference liquidity levels — prefer ranked pool over raw swing
 _liq_high_ref = eqh_active and not na(eqh_price) ? eqh_price : (not na(pdh) ? pdh : (not na(pwh) ? pwh : last_swing_high))
@@ -867,17 +874,10 @@ if sweep_up or sweep_down
     sweep_bar := bar_index
     mss_bar   := na
 
-bos_thresh = pip_type == "JPY" ? bos_min_pips_jpy * 0.01 : bos_min_pips_usd * 0.0001
-eq_thresh  = bos_thresh * 0.50
-
 is_hh = not na(last_ph1) and not na(last_ph2) and last_ph1 > last_ph2 + bos_thresh
 is_lh = not na(last_ph1) and not na(last_ph2) and last_ph1 < last_ph2 - bos_thresh
 is_hl = not na(last_pl1) and not na(last_pl2) and last_pl1 > last_pl2 + bos_thresh
 is_ll = not na(last_pl1) and not na(last_pl2) and last_pl1 < last_pl2 - bos_thresh
-eqh_active = not na(last_ph1) and not na(last_ph2) and math.abs(last_ph1 - last_ph2) <= eq_thresh
-eql_active = not na(last_pl1) and not na(last_pl2) and math.abs(last_pl1 - last_pl2) <= eq_thresh
-eqh_price  = eqh_active ? math.max(last_ph1, last_ph2) : na
-eql_price  = eql_active ? math.min(last_pl1, last_pl2) : na
 
 var int regime              = 0
 var int prev_regime         = 0
@@ -2258,20 +2258,56 @@ if ict_enabled and show_ict_table and barstate.islast
     table.cell(hm_tbl, 1, 12, seq_str,              text_color=seq_col,              text_size=size.small, bgcolor=C_TBL_BG_DATA)
 
     // ── Row 13: SWEEP STATE ─────────────────────────────────────────
-    _swp_state_str = swp_cand_dir == 1 ? "CAND UP" : swp_cand_dir == -1 ? "CAND DOWN" : sweep_up ? "CONF UP ✓" : sweep_down ? "CONF DOWN ✓" : last_confirmed_sweep_dir == 1 ? "LAST: UP" : last_confirmed_sweep_dir == -1 ? "LAST: DOWN" : "NONE"
-    _swp_state_col = sweep_up or sweep_down ? C_TBL_BULL : swp_cand_dir != 0 ? color.new(#F5A623, 0) : last_confirmed_sweep_dir != 0 ? C_TBL_NEUTRAL : C_TBL_BEAR
+    string _swp_state_str = "NONE"
+    color  _swp_state_col = C_TBL_BEAR
+    if swp_cand_dir == 1
+        _swp_state_str := "CAND UP"
+        _swp_state_col := color.new(#F5A623, 0)
+    else if swp_cand_dir == -1
+        _swp_state_str := "CAND DOWN"
+        _swp_state_col := color.new(#F5A623, 0)
+    else if sweep_up
+        _swp_state_str := "CONF UP ✓"
+        _swp_state_col := C_TBL_BULL
+    else if sweep_down
+        _swp_state_str := "CONF DOWN ✓"
+        _swp_state_col := C_TBL_BULL
+    else if last_confirmed_sweep_dir == 1
+        _swp_state_str := "LAST: UP"
+        _swp_state_col := C_TBL_NEUTRAL
+    else if last_confirmed_sweep_dir == -1
+        _swp_state_str := "LAST: DOWN"
+        _swp_state_col := C_TBL_NEUTRAL
     table.cell(hm_tbl, 0, 13, "SWEEP STATE",  text_color=C_TBL_LBL,       text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 1, 13, _swp_state_str, text_color=_swp_state_col,  text_size=size.small, bgcolor=C_TBL_BG_DATA)
 
     // ── Row 14: DISPLACEMENT ────────────────────────────────────────
-    _disp_str = mss_bullish ? (_displacement_ok_bull ? "PASS ▲" : "WEAK ▲") : mss_bearish ? (_displacement_ok_bear ? "PASS ▼" : "WEAK ▼") : last_confirmed_mss_dir == 1 ? (last_disp_ok_bull ? "LAST: PASS ▲" : "LAST: WEAK ▲") : last_confirmed_mss_dir == -1 ? (last_disp_ok_bear ? "LAST: PASS ▼" : "LAST: WEAK ▼") : "—"
-    _disp_col = (mss_bullish and _displacement_ok_bull) or (mss_bearish and _displacement_ok_bear) ? C_TBL_BULL : (mss_bullish or mss_bearish) ? color.new(#F5A623, 0) : last_confirmed_mss_dir != 0 ? C_TBL_NEUTRAL : C_TBL_BEAR
+    string _disp_str = "—"
+    color  _disp_col = C_TBL_BEAR
+    if mss_bullish
+        _disp_str := _displacement_ok_bull ? "PASS ▲" : "WEAK ▲"
+        _disp_col := _displacement_ok_bull ? C_TBL_BULL : color.new(#F5A623, 0)
+    else if mss_bearish
+        _disp_str := _displacement_ok_bear ? "PASS ▼" : "WEAK ▼"
+        _disp_col := _displacement_ok_bear ? C_TBL_BULL : color.new(#F5A623, 0)
+    else if last_confirmed_mss_dir == 1
+        _disp_str := last_disp_ok_bull ? "LAST: PASS ▲" : "LAST: WEAK ▲"
+        _disp_col := C_TBL_NEUTRAL
+    else if last_confirmed_mss_dir == -1
+        _disp_str := last_disp_ok_bear ? "LAST: PASS ▼" : "LAST: WEAK ▼"
+        _disp_col := C_TBL_NEUTRAL
     table.cell(hm_tbl, 0, 14, "DISPLACEMENT", text_color=C_TBL_LBL,  text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 1, 14, _disp_str,      text_color=_disp_col,  text_size=size.small, bgcolor=C_TBL_BG_DATA)
 
     // ── Row 15: EF SOURCE ───────────────────────────────────────────
-    _ef_src_str = ef_is_narrative ? "NARRATIVE ✓" : not na(ef_anchor_low) ? "HTF_FALLBACK" : "NONE"
-    _ef_src_col = ef_is_narrative ? C_TBL_BULL : not na(ef_anchor_low) ? color.new(#F5A623, 0) : C_TBL_BEAR
+    string _ef_src_str = "NONE"
+    color  _ef_src_col = C_TBL_BEAR
+    if ef_is_narrative
+        _ef_src_str := "NARRATIVE ✓"
+        _ef_src_col := C_TBL_BULL
+    else if not na(ef_anchor_low)
+        _ef_src_str := "HTF_FALLBACK"
+        _ef_src_col := color.new(#F5A623, 0)
     table.cell(hm_tbl, 0, 15, "EF SOURCE",  text_color=C_TBL_LBL,  text_size=size.tiny,  bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 1, 15, _ef_src_str, text_color=_ef_src_col, text_size=size.small, bgcolor=C_TBL_BG_DATA)
 
