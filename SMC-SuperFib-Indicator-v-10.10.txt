@@ -787,6 +787,13 @@ last_swing_high := nz(last_ph1, high)
 last_swing_low  := nz(last_pl1, low)
 alert_bar_ready = not alert_confirmed_only or barstate.isconfirmed
 
+bos_thresh = pip_type == "JPY" ? bos_min_pips_jpy * 0.01 : bos_min_pips_usd * 0.0001
+eq_thresh  = bos_thresh * 0.50
+eqh_active = not na(last_ph1) and not na(last_ph2) and math.abs(last_ph1 - last_ph2) <= eq_thresh
+eql_active = not na(last_pl1) and not na(last_pl2) and math.abs(last_pl1 - last_pl2) <= eq_thresh
+eqh_price  = eqh_active ? math.max(last_ph1, last_ph2) : na
+eql_price  = eql_active ? math.min(last_pl1, last_pl2) : na
+
 // ── STAGED SWEEP LOGIC v10.14.0 ────────────────────────────────────
 // Reference liquidity levels — prefer ranked pool over raw swing
 _liq_high_ref = eqh_active and not na(eqh_price) ? eqh_price : (not na(pdh) ? pdh : (not na(pwh) ? pwh : last_swing_high))
@@ -867,17 +874,10 @@ if sweep_up or sweep_down
     sweep_bar := bar_index
     mss_bar   := na
 
-bos_thresh = pip_type == "JPY" ? bos_min_pips_jpy * 0.01 : bos_min_pips_usd * 0.0001
-eq_thresh  = bos_thresh * 0.50
-
 is_hh = not na(last_ph1) and not na(last_ph2) and last_ph1 > last_ph2 + bos_thresh
 is_lh = not na(last_ph1) and not na(last_ph2) and last_ph1 < last_ph2 - bos_thresh
 is_hl = not na(last_pl1) and not na(last_pl2) and last_pl1 > last_pl2 + bos_thresh
 is_ll = not na(last_pl1) and not na(last_pl2) and last_pl1 < last_pl2 - bos_thresh
-eqh_active = not na(last_ph1) and not na(last_ph2) and math.abs(last_ph1 - last_ph2) <= eq_thresh
-eql_active = not na(last_pl1) and not na(last_pl2) and math.abs(last_pl1 - last_pl2) <= eq_thresh
-eqh_price  = eqh_active ? math.max(last_ph1, last_ph2) : na
-eql_price  = eql_active ? math.min(last_pl1, last_pl2) : na
 
 var int regime              = 0
 var int prev_regime         = 0
