@@ -1,8 +1,8 @@
 //@version=6
-indicator("SMC SuperFib v10.15.1 Final Base – ICT Stabilization Patch", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500, max_bars_back=5000)
+indicator("SMC SuperFib v10.14.3 – ICT Stabilization Patch", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500, max_bars_back=5000)
 
 // ═══════════════════════════════════════════════════════════════════
-// SMC SuperFib v10.14.1 — ICT Stabilization Patch
+// SMC SuperFib v10.14.3 — ICT Stabilization Patch
 //
 // v10.15.0 CHANGES (over v10.14.0):
 //   FIX A — HTF_FALLBACK EF direction now driven by confirmed regime/structure
@@ -196,6 +196,11 @@ show_ef_sltp     = input.bool(true,  "Show EF SL/TP refs", group=GEF, display=di
 ef_col_prem  = input.color(color.new(color.red,   35), "EF premium colour", group=GEF, display=display.none)
 ef_col_disc  = input.color(color.new(color.green, 35), "EF discount colour",group=GEF, display=display.none)
 ef_col_chop  = input.color(color.new(color.gray,  55), "EF chop colour",    group=GEF, display=display.none)
+
+// ── EF LABEL TEXT COLOURS (UI-only — darker for readability) ───────
+ef_txt_prem = color.new(#8B0000, 0)   // dark red   — replaces semi-transparent ef_col_prem in labels
+ef_txt_disc = color.new(#006400, 0)   // dark green — replaces semi-transparent ef_col_disc in labels
+ef_txt_chop = color.new(#0F766E, 0)   // dark teal  — replaces washed-out cyan C_ICT_OTE and ef_col_chop in labels
 
 // ── INPUTS — EF Proximity ──────────────────────────────────────────
 var GEF_PROX = "EF Proximity"
@@ -1606,12 +1611,18 @@ f_label_col_t(base_t, col) =>
 f_fib_label_col() =>
     tf_secs >= 86400 ? 3 : 2
 
+f_f3_line_end_t(base_t) =>
+    // Extends F3 horizontal lines rightward to sit beside the F3 label column.
+    // All other fib lines (F1, F2, SF) terminate at their own anchor column.
+    f_label_col_t(base_t, f_fib_label_col())
+
 // ── DRAWING PRIMITIVES ────────────────────────────────────────────
 f_lvl(a, b, ratio) => a - (a - b) * ratio
 get_lw(depth)      => depth <= 2 ? 1 : depth == 3 ? 2 : 3
 
-draw_hline_t(x_t, price, lc, lw, ls) =>
-    _l = line.new(x_t - _back_extension, price, x_t, price, xloc=xloc.bar_time, color=lc, width=lw, style=ls)
+draw_hline_t(x_t, price, lc, lw, ls, x_t_right=0) =>
+    _right = x_t_right != 0 ? x_t_right : x_t
+    _l = line.new(x_t - _back_extension, price, _right, price, xloc=xloc.bar_time, color=lc, width=lw, style=ls)
     array.push(_fib_lines, _l)
     _l
 
@@ -1647,7 +1658,8 @@ draw_vert_arrow_t(x_t, hi, lo, point_up, vc, lw) =>
 
 draw_level_t(x_t, price, bsz, fib_name, level_pct, lc, bc, tc, depth) =>
     if price != 0.0 and not na(price)
-        draw_hline_t(x_t, price, lc, get_lw(depth), line.style_solid)
+        _x_right = fib_name == "F3" ? f_f3_line_end_t(x_t) : 0
+        draw_hline_t(x_t, price, lc, get_lw(depth), line.style_solid, _x_right)
         if show_bands
             draw_band_t(x_t, price, bsz, bc, depth)
         if show_labels
@@ -1805,15 +1817,15 @@ draw_ef_dotted_t(x_t) =>
         if show_labels and show_ef_labels
             _t0   = ef_is_bull ? "EF 0 — Swing Low / Invalidation" : "EF 0 — Swing High / Invalidation"
             _t100 = ef_is_bull ? "EF 100 — Impulse High" : "EF 100 — Impulse Low"
-            label.new(f_label_col_t(x_t, 2), _lvl0,   _t0   + " @ " + str.tostring(_lvl0, format.mintick),   xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white,100), textcolor=ef_col_prem, size=sz_ef)
+            label.new(f_label_col_t(x_t, 2), _lvl0,   _t0   + " @ " + str.tostring(_lvl0, format.mintick),   xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white,100), textcolor=ef_txt_prem, size=sz_ef)
             label.new(f_label_col_t(x_t, 2), _lvl50,  "EF 50 — Equilibrium @ " + str.tostring(_lvl50, format.mintick), xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white,100), textcolor=color.new(color.gray, 0), size=sz_ef)
             // v10.15.0 FIX C: OTE labels show directional context so it's
             // immediately clear whether this is a buy or sell OTE zone.
             _ote_dir_tag = ef_is_bull ? " [BUY OTE]" : " [SELL OTE]"
-            label.new(f_label_col_t(x_t, 2), _lvl62,  "EF 62 — OTE Start" + _ote_dir_tag + " @ " + str.tostring(_lvl62, format.mintick), xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white,100), textcolor=ef_col_chop, size=sz_ef)
-            label.new(f_label_col_t(x_t, 2), _lvl705, "EF 70.5 — Sweet Spot" + _ote_dir_tag + " @ " + str.tostring(_lvl705, format.mintick), xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.black,75), textcolor=C_ICT_OTE, size=sz_ef)
-            label.new(f_label_col_t(x_t, 2), _lvl79,  "EF 79 — OTE End" + _ote_dir_tag + " @ " + str.tostring(_lvl79, format.mintick), xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white,100), textcolor=ef_col_disc, size=sz_ef)
-            label.new(f_label_col_t(x_t, 2), _lvl100, _t100 + " @ " + str.tostring(_lvl100, format.mintick), xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white,100), textcolor=ef_col_disc, size=sz_ef)
+            label.new(f_label_col_t(x_t, 2), _lvl62,  "EF 62 — OTE Start" + _ote_dir_tag + " @ " + str.tostring(_lvl62, format.mintick), xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white,100), textcolor=ef_txt_chop, size=sz_ef)
+            label.new(f_label_col_t(x_t, 2), _lvl705, "EF 70.5 — Sweet Spot" + _ote_dir_tag + " @ " + str.tostring(_lvl705, format.mintick), xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.black,75), textcolor=ef_txt_chop, size=sz_ef)
+            label.new(f_label_col_t(x_t, 2), _lvl79,  "EF 79 — OTE End" + _ote_dir_tag + " @ " + str.tostring(_lvl79, format.mintick), xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white,100), textcolor=ef_txt_disc, size=sz_ef)
+            label.new(f_label_col_t(x_t, 2), _lvl100, _t100 + " @ " + str.tostring(_lvl100, format.mintick), xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.white,100), textcolor=ef_txt_disc, size=sz_ef)
             // v10.15.1: TP labels share the same narrative gate as TP lines.
             // _ef_tp_draw_ok is already evaluated above in this function scope.
             if show_ef_targets and show_ext and _ef_tp_draw_ok
@@ -2247,7 +2259,7 @@ if ict_enabled and show_ict_table and not _tbl_init
                  bgcolor=C_TBL_BG_DATA, border_color=C_TBL_BORDER,
                  border_width=1, frame_color=C_TBL_BORDER, frame_width=1)
     table.cell(hm_tbl, 0,  0, "SMC SuperFIB",  text_color=C_TBL_HEAD_TXT,        text_size=size.small, bgcolor=C_TBL_BG_HEAD)
-    table.cell(hm_tbl, 1,  0, "v10.15.1 TP Gate",text_color=color.new(#00FFFF,40), text_size=size.tiny,  bgcolor=C_TBL_BG_HEAD)
+    table.cell(hm_tbl, 1,  0, "v10.14.3",text_color=color.new(#00FFFF,40), text_size=size.tiny,  bgcolor=C_TBL_BG_HEAD)
     table.cell(hm_tbl, 0,  1, "STRUCTURE",      text_color=C_TBL_LBL, text_size=size.tiny, bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 0,  2, "HTF PDA",        text_color=C_TBL_LBL, text_size=size.tiny, bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 0,  3, "BIAS",           text_color=C_TBL_LBL, text_size=size.tiny, bgcolor=C_TBL_BG_DATA)
@@ -2595,4 +2607,4 @@ if alert_bar_ready and (ef_pretrig_sell or ef_pretrig_buy)
     _ef_lvl = ef_dist_sweet <= prox_thresh * ef_pre_width ? ef_l0705 : (ef_pretrig_sell ? ef_ote_hi : ef_ote_lo)
     alert("{\"secret\":\"" + webhook_secret + "\",\"signal_type\":\"EF_PRE_TRIGGER\",\"instrument_id\":\"" + syminfo.tickerid + "\",\"symbol\":\"" + syminfo.ticker + "\",\"display_symbol\":\"" + syminfo.ticker + "\",\"pair\":\"" + syminfo.ticker + "\",\"direction\":\"" + (ef_pretrig_sell ? "SELL" : "BUY") + "\",\"level\":" + str.tostring(_ef_lvl) + ",\"ef_mode\":\"" + ef_mode_str + "\",\"ef_high\":" + str.tostring(ef_anchor_high) + ",\"ef_low\":" + str.tostring(ef_anchor_low) + ",\"ef_ote_low\":" + str.tostring(ef_ote_lo) + ",\"ef_ote_high\":" + str.tostring(ef_ote_hi) + ",\"ef_sweet\":" + str.tostring(ef_l0705) + ",\"ef_sl_ref\":" + str.tostring(ef_anchor_dir == 1 ? ef_anchor_low : ef_anchor_high) + ",\"ef_tp1\":" + str.tostring(ef_lm1) + ",\"ef_tp2\":" + str.tostring(ef_lm2) + ",\"market_price\":" + str.tostring(close) + ",\"regime\":\"" + _clean_regime + "\",\"sequence_status\":\"" + sequence_status + "\",\"setup_class\":\"" + _ef_grade + "\",\"setup_quality\":" + str.tostring(_ef_setup_q) + ",\"execution_quality\":" + str.tostring(_ef_exec_q) + ",\"liquidity\":{\"type\":\"" + liquidity_type + "\",\"price\":" + str.tostring(nz(liquidity_price, 0.0)) + "},\"structure\":{\"major_bos\":" + ((_ef_is_buy ? major_bull_close : major_bear_close) ? "true" : "false") + ",\"internal_shift\":" + ((_ef_is_buy ? mss_bullish : mss_bearish) ? "true" : "false") + ",\"choch\":" + (regime == 2 ? "true" : "false") + ",\"session_tag\":\"" + session_tag + "\"},\"poi\":{\"type\":\"" + (_ef_is_buy ? (bull_fvg_support ? "BULL_OB_FVG" : "BULL_OB") : (bear_fvg_support ? "BEAR_OB_FVG" : "BEAR_OB")) + "\",\"high\":" + str.tostring(nz(_ef_is_buy ? bull_poi_high : bear_poi_high, 0.0)) + ",\"low\":" + str.tostring(nz(_ef_is_buy ? bull_poi_low : bear_poi_low, 0.0)) + ",\"freshness_bars\":" + str.tostring(nz(_ef_is_buy ? last_bear_age : last_bull_age, 999)) + ",\"has_adjacent_fvg\":" + ((_ef_is_buy ? bull_fvg_support : bear_fvg_support) ? "true" : "false") + "},\"timestamp\":\"" + str.tostring(time) + "\"}", alert.freq_once_per_bar_close)
 
-// End of SMC SuperFib v10.14.1
+// End of SMC SuperFib v10.14.3
