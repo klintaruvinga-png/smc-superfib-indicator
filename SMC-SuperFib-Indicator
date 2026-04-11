@@ -1,8 +1,8 @@
 //@version=6
-indicator("SMC SuperFib v10.14.2 – ICT Stabilization Patch", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500, max_bars_back=5000)
+indicator("SMC SuperFib v10.14.3 – ICT Stabilization Patch", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500, max_bars_back=5000)
 
 // ═══════════════════════════════════════════════════════════════════
-// SMC SuperFib v10.14.2 — ICT Stabilization Patch
+// SMC SuperFib v10.14.3 — ICT Stabilization Patch
 //
 // v10.15.0 CHANGES (over v10.14.0):
 //   FIX A — HTF_FALLBACK EF direction now driven by confirmed regime/structure
@@ -1620,8 +1620,9 @@ f_f3_line_end_t(base_t) =>
 f_lvl(a, b, ratio) => a - (a - b) * ratio
 get_lw(depth)      => depth <= 2 ? 1 : depth == 3 ? 2 : 3
 
-draw_hline_t(x_t, price, lc, lw, ls) =>
-    _l = line.new(x_t - _back_extension, price, x_t, price, xloc=xloc.bar_time, color=lc, width=lw, style=ls)
+draw_hline_t(x_t, price, lc, lw, ls, x_t_right=0) =>
+    _right = x_t_right != 0 ? x_t_right : x_t
+    _l = line.new(x_t - _back_extension, price, _right, price, xloc=xloc.bar_time, color=lc, width=lw, style=ls)
     array.push(_fib_lines, _l)
     _l
 
@@ -1657,8 +1658,8 @@ draw_vert_arrow_t(x_t, hi, lo, point_up, vc, lw) =>
 
 draw_level_t(x_t, price, bsz, fib_name, level_pct, lc, bc, tc, depth) =>
     if price != 0.0 and not na(price)
-        _line_x_t = fib_name == "F3" ? f_f3_line_end_t(x_t) : x_t
-        draw_hline_t(_line_x_t, price, lc, get_lw(depth), line.style_solid)
+        _x_right = fib_name == "F3" ? f_f3_line_end_t(x_t) : 0
+        draw_hline_t(x_t, price, lc, get_lw(depth), line.style_solid, _x_right)
         if show_bands
             draw_band_t(x_t, price, bsz, bc, depth)
         if show_labels
@@ -2258,7 +2259,7 @@ if ict_enabled and show_ict_table and not _tbl_init
                  bgcolor=C_TBL_BG_DATA, border_color=C_TBL_BORDER,
                  border_width=1, frame_color=C_TBL_BORDER, frame_width=1)
     table.cell(hm_tbl, 0,  0, "SMC SuperFIB",  text_color=C_TBL_HEAD_TXT,        text_size=size.small, bgcolor=C_TBL_BG_HEAD)
-    table.cell(hm_tbl, 1,  0, "v10.14.2",text_color=color.new(#00FFFF,40), text_size=size.tiny,  bgcolor=C_TBL_BG_HEAD)
+    table.cell(hm_tbl, 1,  0, "v10.14.3",text_color=color.new(#00FFFF,40), text_size=size.tiny,  bgcolor=C_TBL_BG_HEAD)
     table.cell(hm_tbl, 0,  1, "STRUCTURE",      text_color=C_TBL_LBL, text_size=size.tiny, bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 0,  2, "HTF PDA",        text_color=C_TBL_LBL, text_size=size.tiny, bgcolor=C_TBL_BG_DATA)
     table.cell(hm_tbl, 0,  3, "BIAS",           text_color=C_TBL_LBL, text_size=size.tiny, bgcolor=C_TBL_BG_DATA)
@@ -2606,4 +2607,4 @@ if alert_bar_ready and (ef_pretrig_sell or ef_pretrig_buy)
     _ef_lvl = ef_dist_sweet <= prox_thresh * ef_pre_width ? ef_l0705 : (ef_pretrig_sell ? ef_ote_hi : ef_ote_lo)
     alert("{\"secret\":\"" + webhook_secret + "\",\"signal_type\":\"EF_PRE_TRIGGER\",\"instrument_id\":\"" + syminfo.tickerid + "\",\"symbol\":\"" + syminfo.ticker + "\",\"display_symbol\":\"" + syminfo.ticker + "\",\"pair\":\"" + syminfo.ticker + "\",\"direction\":\"" + (ef_pretrig_sell ? "SELL" : "BUY") + "\",\"level\":" + str.tostring(_ef_lvl) + ",\"ef_mode\":\"" + ef_mode_str + "\",\"ef_high\":" + str.tostring(ef_anchor_high) + ",\"ef_low\":" + str.tostring(ef_anchor_low) + ",\"ef_ote_low\":" + str.tostring(ef_ote_lo) + ",\"ef_ote_high\":" + str.tostring(ef_ote_hi) + ",\"ef_sweet\":" + str.tostring(ef_l0705) + ",\"ef_sl_ref\":" + str.tostring(ef_anchor_dir == 1 ? ef_anchor_low : ef_anchor_high) + ",\"ef_tp1\":" + str.tostring(ef_lm1) + ",\"ef_tp2\":" + str.tostring(ef_lm2) + ",\"market_price\":" + str.tostring(close) + ",\"regime\":\"" + _clean_regime + "\",\"sequence_status\":\"" + sequence_status + "\",\"setup_class\":\"" + _ef_grade + "\",\"setup_quality\":" + str.tostring(_ef_setup_q) + ",\"execution_quality\":" + str.tostring(_ef_exec_q) + ",\"liquidity\":{\"type\":\"" + liquidity_type + "\",\"price\":" + str.tostring(nz(liquidity_price, 0.0)) + "},\"structure\":{\"major_bos\":" + ((_ef_is_buy ? major_bull_close : major_bear_close) ? "true" : "false") + ",\"internal_shift\":" + ((_ef_is_buy ? mss_bullish : mss_bearish) ? "true" : "false") + ",\"choch\":" + (regime == 2 ? "true" : "false") + ",\"session_tag\":\"" + session_tag + "\"},\"poi\":{\"type\":\"" + (_ef_is_buy ? (bull_fvg_support ? "BULL_OB_FVG" : "BULL_OB") : (bear_fvg_support ? "BEAR_OB_FVG" : "BEAR_OB")) + "\",\"high\":" + str.tostring(nz(_ef_is_buy ? bull_poi_high : bear_poi_high, 0.0)) + ",\"low\":" + str.tostring(nz(_ef_is_buy ? bull_poi_low : bear_poi_low, 0.0)) + ",\"freshness_bars\":" + str.tostring(nz(_ef_is_buy ? last_bear_age : last_bull_age, 999)) + ",\"has_adjacent_fvg\":" + ((_ef_is_buy ? bull_fvg_support : bear_fvg_support) ? "true" : "false") + "},\"timestamp\":\"" + str.tostring(time) + "\"}", alert.freq_once_per_bar_close)
 
-// End of SMC SuperFib v10.14.2
+// End of SMC SuperFib v10.14.3
